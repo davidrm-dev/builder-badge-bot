@@ -33,7 +33,18 @@ log = logging.getLogger("builder-badge-bot")
 
 DB_PATH = os.environ.get("BOT_DB_PATH", "data/bot.sqlite3")
 DEFAULT_TZ = os.environ.get("BOT_DEFAULT_TZ", "America/Bogota")
-store = Store(DB_PATH)
+
+
+def build_store():
+    """DynamoDB si corre en Lambda (BOT_TABLE), SQLite en local/VM."""
+    if os.environ.get("BOT_TABLE"):
+        from .dynamo import DynamoStore
+
+        return DynamoStore()
+    return Store(DB_PATH)
+
+
+store = build_store()
 
 HELP = """*Comandos*
 /perfil `alias` – conecta tu perfil de Builder Center (o pega la URL)
@@ -120,6 +131,8 @@ def sync_badges(chat_id: int, notify_new: bool = True) -> tuple[list[str], int, 
 
 # --------------------------------------------------------------------------- scheduling
 def schedule_user(app: Application, user: User) -> None:
+    if app.job_queue is None:  # en Lambda los recordatorios los dispara EventBridge
+        return
     name = f"daily:{user.chat_id}"
     for job in app.job_queue.get_jobs_by_name(name):
         job.schedule_removal()
@@ -133,8 +146,8 @@ def schedule_user(app: Application, user: User) -> None:
     )
 
 
-async def daily_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = context.job.chat_id
+async def send_daily(bot, chat_id: int) -> None:
+    """Sincroniza badges y manda el recordatorio diario (usado por job_queue y por Lambda)."""
     user = store.get_user(chat_id)
     if not user or not user.enabled:
         return
@@ -144,25 +157,29 @@ async def daily_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         log.warning("sync falló para %s: %s", chat_id, exc)
         new_names, total, tiers = [], store.badge_count(chat_id), []
     if new_names:
-        await context.bot.send_message(
+        await bot.send_message(
             chat_id,
             coach.congrats_message(new_names, total, tiers),
             parse_mode=ParseMode.MARKDOWN,
         )
     day = today_for(user)
     if total >= cat.TOTAL:
-        await context.bot.send_message(
+        await bot.send_message(
             chat_id,
             "🏆 Ya tienes las 21 badges. Reclama tu voucher en Student Rewards y, si quieres, "
             "usa /pausar para dejar de recibir recordatorios.",
         )
         return
-    await context.bot.send_message(
+    await bot.send_message(
         chat_id,
         coach.daily_message(store, chat_id, day),
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=routine_keyboard(chat_id, day),
     )
+
+
+async def daily_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    await send_daily(context.bot, context.job.chat_id)
 
 
 # --------------------------------------------------------------------------- comandos
@@ -359,8 +376,9 @@ async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     store.delete_user(chat_id)
-    for job in context.application.job_queue.get_jobs_by_name(f"daily:{chat_id}"):
-        job.schedule_removal()
+    if context.application.job_queue is not None:
+        for job in context.application.job_queue.get_jobs_by_name(f"daily:{chat_id}"):
+            job.schedule_removal()
     await update.message.reply_text("🗑️ Datos eliminados. Empieza de nuevo con /start.")
 
 
@@ -420,8 +438,13 @@ async def post_init(app: Application) -> None:
     log.info("Jobs programados para %d usuario(s)", len(store.all_users()))
 
 
-def build_app(token: str) -> Application:
-    app = Application.builder().token(token).post_init(post_init).build()
+def build_app(token: str, *, with_jobs: bool = True) -> Application:
+    builder = Application.builder().token(token)
+    if with_jobs:
+        builder = builder.post_init(post_init)
+    else:
+        builder = builder.job_queue(None).updater(None)
+    app = builder.build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler(["ayuda", "help"], cmd_help))
     app.add_handler(CommandHandler(["perfil", "profile", "alias"], cmd_profile))

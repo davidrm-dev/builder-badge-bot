@@ -49,6 +49,54 @@ docker run -d --restart unless-stopped \
 
 La base de datos SQLite vive en `data/bot.sqlite3` (configurable con `BOT_DB_PATH`).
 
+## Desplegar en AWS (serverless, ~$0)
+
+El mismo código corre en Lambda: si existe la variable `BOT_TABLE`, el bot usa DynamoDB en vez
+de SQLite y los recordatorios los dispara EventBridge Scheduler en vez del job queue local.
+
+```
+Telegram ──webhook──▶ Lambda Function URL (bot.lambda_webhook)
+                          │
+EventBridge Scheduler ─▶ Lambda (bot.lambda_scheduler) ──▶ DynamoDB  ──▶ api.builder.aws.com
+                          (cada 15 min, filtra por hora local de cada usuario)
+```
+
+| Recurso | Para qué | Costo típico |
+| --- | --- | --- |
+| Lambda (x2, arm64) | webhook + recordatorios | free tier: 1M req y 400k GB-s/mes |
+| DynamoDB on-demand | usuarios, badges, check-ins (TTL 400 días) | free tier: 25 GB |
+| EventBridge Scheduler | ~2.900 invocaciones/mes | free tier: 14M invocaciones |
+| SSM Parameter Store | token de BotFather (SecureString) | Standard: gratis |
+
+Los precios dependen de región, fecha y uso; verifica en la calculadora de AWS.
+
+```bash
+# 1. token en SSM (no viaja en el template ni queda en git)
+aws ssm put-parameter --name /builder-badge-bot/telegram-token \
+  --type SecureString --value "$TELEGRAM_BOT_TOKEN" --overwrite
+
+# 2. secreto del webhook: Telegram lo manda en cada request y la Lambda lo valida
+WEBHOOK_SECRET=$(openssl rand -hex 32)
+
+# 3. desplegar
+sam build
+sam deploy --stack-name builder-badge-bot --resolve-s3 --capabilities CAPABILITY_IAM \
+  --parameter-overrides WebhookSecret=$WEBHOOK_SECRET
+
+# 4. registrar el webhook
+URL=$(aws cloudformation describe-stacks --stack-name builder-badge-bot \
+  --query "Stacks[0].Outputs[?OutputKey=='WebhookUrl'].OutputValue" --output text)
+curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
+  -d "url=$URL" -d "secret_token=$WEBHOOK_SECRET" -d "drop_pending_updates=true"
+```
+
+Para borrar todo: `sam delete --stack-name builder-badge-bot`.
+
+### Alternativa: Lightsail / EC2
+
+Si prefieres no portar nada, corre el `Dockerfile` tal cual en una instancia Lightsail
+(bundle solo IPv6, ~$3.50/mes) con `--restart unless-stopped` y un volumen para `data/`.
+
 ## Tests
 
 ```bash
