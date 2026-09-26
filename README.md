@@ -54,3 +54,7 @@ La base de datos SQLite vive en `data/bot.sqlite3` (configurable con `BOT_DB_PAT
 ```bash
 python -m pytest
 ```
+
+## Licencia
+
+MIT — ver [LICENSE](LICENSE).
