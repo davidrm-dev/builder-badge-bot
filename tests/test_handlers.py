@@ -37,10 +37,15 @@ def env(tmp_path, monkeypatch):
     return botmain.store
 
 
-def fake_update() -> tuple[SimpleNamespace, AsyncMock]:
+def fake_update(lang_code: str | None = None) -> tuple[SimpleNamespace, AsyncMock]:
     reply = AsyncMock()
     message = SimpleNamespace(reply_text=reply, text="")
-    return SimpleNamespace(effective_chat=SimpleNamespace(id=42), message=message), reply
+    update = SimpleNamespace(
+        effective_chat=SimpleNamespace(id=42),
+        effective_user=SimpleNamespace(language_code=lang_code),
+        message=message,
+    )
+    return update, reply
 
 
 def fake_context(*args: str) -> SimpleNamespace:
@@ -52,6 +57,7 @@ def fake_context(*args: str) -> SimpleNamespace:
     ("handler", "args", "expected"),
     [
         (botmain.cmd_start, (), "21 badges"),
+        (botmain.cmd_help, (), "Guía rápida"),
         (botmain.cmd_profile, ("davidrm",), "Conectado"),
         (botmain.cmd_time, ("07:15",), "07:15"),
         (botmain.cmd_badges, (), "1/21"),
@@ -87,3 +93,38 @@ async def test_bad_time_is_rejected(env):
     update, reply = fake_update()
     await botmain.cmd_time(update, fake_context("25:99"))
     assert "/hora 08:30" in reply.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_language_switches_all_messages(env):
+    update, reply = fake_update()
+    await botmain.cmd_profile(update, fake_context("davidrm"))
+    await botmain.cmd_lang(update, fake_context("en"))
+    assert botmain.store.get_user(42).lang == "en"
+
+    reply.reset_mock()
+    await botmain.cmd_today(update, fake_context())
+    assert "Today's mission" in reply.await_args.args[0]
+
+    reply.reset_mock()
+    await botmain.cmd_help(update, fake_context())
+    assert "Quick guide" in reply.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_start_follows_telegram_locale(env):
+    update, reply = fake_update(lang_code="en-US")
+    await botmain.cmd_start(update, fake_context())
+    assert botmain.store.get_user(42).lang == "en"
+    assert "21 AWS Builder Center badges" in reply.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_daily_keyboard_links_to_builder_center(env):
+    update, reply = fake_update()
+    await botmain.cmd_profile(update, fake_context("davidrm"))
+    reply.reset_mock()
+    await botmain.cmd_today(update, fake_context())
+    markup = reply.await_args.kwargs["reply_markup"]
+    urls = [b.url for row in markup.inline_keyboard for b in row if b.url]
+    assert "https://builder.aws.com/" in urls
