@@ -84,3 +84,12 @@ def test_marcas_de_envio_y_borrado(store):
     store.save_badge(1, "b1", None, "Otra", None)
     store.delete_user(1)
     assert store.get_user(1) is None and store.badge_count(1) == 0
+
+def test_ajuste_de_racha_sobrevive_al_dia_siguiente(store):
+    store.ensure_user(1)
+    today = date(2026, 3, 10)
+    store.set_streak(1, "visit", 5, today)
+    assert store.daily_streak(1, "visit", today) == 5
+    assert store.daily_streak(1, "visit", today + timedelta(days=1)) == 5
+    store.reset_streak(1, "visit", today)
+    assert store.daily_streak(1, "visit", today) == 0
