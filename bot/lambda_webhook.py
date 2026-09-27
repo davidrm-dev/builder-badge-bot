@@ -14,22 +14,30 @@ from .main import build_app
 
 log = logging.getLogger("builder-badge-bot.webhook")
 
-# La app se inicializa una vez y se reutiliza entre invocaciones warm (Lambda container reuse).
-# El loop se crea por invocación con asyncio.run() para evitar que un loop en estado inválido
-# contamine todas las invocaciones subsiguientes.
+# La app y su event loop se crean una vez y se reutilizan entre invocaciones warm: el cliente
+# HTTP de python-telegram-bot queda atado al loop donde se inicializó, así que cerrarlo por
+# invocación rompería la siguiente con "Event loop is closed".
 _app = None
+_loop: asyncio.AbstractEventLoop | None = None
 
 
 def _get_app():
-    global _app
-    if _app is None:
-        _app = build_app(telegram_token(), with_jobs=False)
-        asyncio.run(_initialize(_app))
+    global _app, _loop
+    if _app is None or _loop is None or _loop.is_closed():
+        _loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(_loop)
+        app = build_app(telegram_token(), with_jobs=False)
+        _loop.run_until_complete(app.initialize())
+        _app = app
     return _app
 
 
-async def _initialize(app) -> None:
-    await app.initialize()
+def _reset() -> None:
+    global _app, _loop
+    _app = None
+    if _loop is not None and not _loop.is_closed():
+        _loop.close()
+    _loop = None
 
 
 def _body(event: dict) -> dict:
@@ -47,9 +55,9 @@ def handler(event: dict, context: object) -> dict:
 
     app = _get_app()
     update = Update.de_json(_body(event), app.bot)
-    asyncio.run(_process(app, update))
+    try:
+        _loop.run_until_complete(app.process_update(update))
+    except RuntimeError:  # loop en estado inválido: se reconstruye para la siguiente invocación
+        log.exception("Loop inválido, reiniciando la app")
+        _reset()
     return {"statusCode": 200, "body": "ok"}
-
-
-async def _process(app, update: Update) -> None:
-    await app.process_update(update)
