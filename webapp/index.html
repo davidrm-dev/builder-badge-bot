@@ -79,6 +79,7 @@ const T = {
     adjust: "Ajustar", days: "días", weeks: "semanas", of: "de", set_streak: "¿Cuántos días llevas?",
     saved: "Listo", not_found: "No encontré ese perfil en Builder Center",
     api_down: "Builder Center no responde ahora mismo", error: "Algo falló, intenta de nuevo",
+    bad_number: "Escribe solo el número de días (ej. 12)",
     no_profile: "Conecta tu perfil para ver tus insignias.", done_all: "¡Completaste las 21! 🏆",
     view_profile: "Ver mi perfil",
   },
@@ -92,6 +93,7 @@ const T = {
     adjust: "Adjust", days: "days", weeks: "weeks", of: "of", set_streak: "How many days so far?",
     saved: "Done", not_found: "I couldn't find that Builder Center profile",
     api_down: "Builder Center is not responding right now", error: "Something failed, try again",
+    bad_number: "Type just the number of days (e.g. 12)",
     no_profile: "Connect your profile to see your badges.", done_all: "All 21 done! 🏆",
     view_profile: "View my profile",
   },
@@ -148,7 +150,7 @@ function header() {
 
 function todayTab() {
   if (!state.user.alias) {
-    return `<div class="card"><p>${tr("no_profile")}</p></div>` + profileCard();
+    return `<div class="card"><p>${tr("no_profile")}</p></div>` + profileCard() + `<p class="err" id="msg"></p>`;
   }
   const daily = state.routine.filter((r) => !r.weekly);
   const weekly = state.routine.filter((r) => r.weekly);
@@ -264,7 +266,13 @@ function bind() {
       const current = state.streaks.find((s) => s.metric === el.dataset.streak);
       const answer = prompt(`${tr("set_streak")} (${esc(current.label)})`, current.streak);
       if (answer === null) return;
-      act("/api/streak", { metric: el.dataset.streak, days: parseInt(answer, 10) || 0 }, el);
+      // Sin esto, un texto cualquiera se enviaba como 0 y borraba la racha en silencio.
+      if (!/^\d+$/.test(answer.trim())) {
+        const msg = $("#msg");
+        if (msg) msg.textContent = tr("bad_number");
+        return;
+      }
+      act("/api/streak", { metric: el.dataset.streak, days: parseInt(answer, 10) }, el);
     });
 
   document.querySelectorAll("[data-lang]").forEach((el) =>

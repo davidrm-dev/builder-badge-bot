@@ -137,6 +137,36 @@ def test_ajustes_guardan_hora_zona_idioma_y_pausa(env):
     assert body["user"]["enabled"] is False
 
 
+def test_cambiar_la_hora_no_reactiva_los_recordatorios_pausados(env):
+    call("/api/settings", enabled=False)
+    _status, body = call("/api/settings", hour=7, minute=15)
+    assert body["user"]["time"] == "07:15"
+    assert body["user"]["enabled"] is False
+
+
+def test_racha_con_valor_no_numerico_no_la_borra(env):
+    call("/api/streak", metric="visit", days=5)
+    status, _body = call("/api/streak", metric="visit", days=None)
+    assert status == 400
+    _status, body = call("/api/state")
+    assert next(s for s in body["streaks"] if s["metric"] == "visit")["streak"] == 5
+
+
+def test_alias_malformado_se_reporta_como_perfil_inexistente(monkeypatch):
+    """Builder Center devuelve 400 con alias raros; para el usuario es "no existe", no una caída."""
+    monkeypatch.setattr(
+        api.requests, "post",
+        lambda *a, **k: type("R", (), {"status_code": 400, "ok": False})(),
+    )
+    with pytest.raises(api.ProfileNotFound):
+        api.get_profile("no valido!!")
+
+
+def test_los_textos_del_panel_no_traen_markdown(env):
+    _status, body = call("/api/state")
+    assert "*" not in body["progress"]["tier"] + body["motivation"]
+
+
 @pytest.mark.parametrize(
     ("path", "payload"),
     [

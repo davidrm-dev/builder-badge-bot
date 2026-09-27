@@ -114,6 +114,11 @@ def _streaks_state(chat_id: int, lang: str, earned: set[str], today) -> list[dic
     return rows
 
 
+def _plain(text: str) -> str:
+    """Los textos del bot vienen en Markdown de Telegram; el panel los muestra tal cual."""
+    return text.replace("*", "").replace("_", "")
+
+
 def state(chat_id: int) -> dict:
     user = botmain.store.ensure_user(chat_id)
     lang = normalize(user.lang)
@@ -136,7 +141,7 @@ def state(chat_id: int) -> dict:
             "earned": total,
             "total": cat.TOTAL,
             "percent": round(100 * total / cat.TOTAL),
-            "tier": coach.tier_line(lang, total),
+            "tier": _plain(coach.tier_line(lang, total)),
         },
         "badges": _badges_state(lang, earned),
         "routine": _routine_state(lang, botmain.store.tasks_done(chat_id, today)),
@@ -145,7 +150,7 @@ def state(chat_id: int) -> dict:
             {"name": b.name, "how": b.how(lang), "url": b.url}
             for b in coach.next_targets(earned)
         ],
-        "motivation": coach.motivation(lang),
+        "motivation": _plain(coach.motivation(lang)),
         "links": cat.LINKS,
     }
 
@@ -164,7 +169,12 @@ def _set_settings(chat_id: int, payload: dict) -> None:
         hour, minute = int(payload["hour"]), int(payload["minute"])
         if not (0 <= hour <= 23 and 0 <= minute <= 59):
             raise ValueError("time")
+        # set_schedule reactiva los recordatorios (así se comporta /hora), pero cambiar la hora
+        # desde el panel no debe sacar al usuario de la pausa.
+        paused = not botmain.store.ensure_user(chat_id).enabled
         botmain.store.set_schedule(chat_id, hour, minute)
+        if paused and "enabled" not in payload:
+            botmain.store.set_enabled(chat_id, False)
     if "enabled" in payload:
         botmain.store.set_enabled(chat_id, bool(payload["enabled"]))
 
@@ -191,7 +201,10 @@ def _set_streak(chat_id: int, payload: dict) -> None:
     metric = payload.get("metric")
     if metric not in DAILY_METRICS:
         raise ValueError("metric")
-    days = int(payload.get("days") or 0)
+    try:
+        days = int(payload["days"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("days") from exc
     max_target = max((b.target for b in cat.CATALOG if b.metric == metric and b.target), default=90)
     if not (0 <= days <= max_target):
         raise ValueError("days")
