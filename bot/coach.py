@@ -1,39 +1,17 @@
-"""Genera el mensaje diario: progreso, misiones del día y mensajes motivadores."""
+"""Genera los mensajes del bot: progreso, misión del día, rachas y felicitaciones."""
 
 from __future__ import annotations
 
 import random
-from datetime import date
+from datetime import date, timedelta
 
 from . import badges as cat
 from .db import Store
+from .i18n import CHEERS, MOTIVATION, normalize, t
 
-MOTIVATION = (
-    "Cada día que apareces vale más que una semana de intención. 🚀",
-    "La constancia es aburrida... hasta que llega el voucher. 💪",
-    "10 minutos hoy > 2 horas el domingo. ⏱️",
-    "Nadie recuerda el día que empezaste, todos ven el resultado. 🔥",
-    "Tu yo de dentro de 90 días te está mirando. No lo defraudes. 👀",
-    "Un comentario útil hoy puede ser la badge de mañana. 💬",
-    "El algoritmo premia al que vuelve. Vuelve. 🔁",
-)
 
-CONGRATS = (
-    "¡Bien ahí! 🎉",
-    "¡Esa es! 🏅",
-    "¡Crack! 🔥",
-    "¡Vamos con toda! 🚀",
-    "¡Se siente bonito, no? ✨",
-)
-
-TASK_LABEL = {
-    "visit": "Sign-in",
-    "read": "Leer",
-    "like": "Like",
-    "comment": "Comentar",
-    "article_week": "Artículo semanal",
-    "wish_vote_week": "Voto en wishes",
-}
+def motivation(lang: str) -> str:
+    return random.choice(MOTIVATION[normalize(lang)])
 
 
 def progress_bar(done: int, total: int, width: int = 10) -> str:
@@ -64,111 +42,142 @@ def next_targets(earned: set[str], limit: int = 3) -> list[cat.Badge]:
     return picked
 
 
-def badge_overview(store: Store, chat_id: int) -> str:
+def progress_line(lang: str, total: int) -> str:
+    return t(lang, "progress", total=total, max=cat.TOTAL, bar=progress_bar(total, cat.TOTAL))
+
+
+def tier_line(lang: str, total: int) -> str:
+    lang = normalize(lang)
+    remaining = [x for x in cat.TIER_VALUES if total < x]
+    if not remaining:
+        return t(lang, "tier_done")
+    nxt = remaining[0]
+    return t(lang, "tier_next", missing=nxt - total, reward=cat.REWARD_TIERS[lang][nxt])
+
+
+def badge_overview(store: Store, chat_id: int, lang: str = "es") -> str:
+    lang = normalize(lang)
     earned = earned_keys(store, chat_id)
     total_earned = store.badge_count(chat_id)
-    lines = [
-        f"*Progreso: {total_earned}/{cat.TOTAL}*",
-        f"`{progress_bar(total_earned, cat.TOTAL)}`",
-        "",
-    ]
-    for phase in sorted(cat.PHASE_NAMES):
-        lines.append(f"*{cat.PHASE_NAMES[phase]}*")
+    lines = [t(lang, "overview_title"), progress_line(lang, total_earned), ""]
+    for phase in sorted(cat.PHASE_NAMES[lang]):
+        lines.append(cat.PHASE_NAMES[lang][phase])
         for badge in cat.CATALOG:
             if badge.phase != phase:
                 continue
             mark = "✅" if badge.key in earned else "⬜"
             lines.append(f"{mark} {badge.name}")
         lines.append("")
-    remaining = [t for t in sorted(cat.REWARD_TIERS) if total_earned < t]
-    if remaining:
-        nxt = remaining[0]
-        lines.append(f"Te faltan *{nxt - total_earned}* para: {cat.REWARD_TIERS[nxt]}")
-    else:
-        lines.append("🏆 ¡Tienes las 21! Reclama tu voucher en Student Rewards.")
+    lines.append(tier_line(lang, total_earned))
     return "\n".join(lines).strip()
 
 
-def streak_lines(store: Store, chat_id: int, today: date, earned: set[str]) -> list[str]:
+def streak_lines(store: Store, chat_id: int, today: date, earned: set[str], lang: str = "es") -> list[str]:
+    lang = normalize(lang)
     lines = []
-    for metric, label in (("visit", "🔑 Sign-in"), ("like", "❤️ Likes"), ("comment", "💬 Comentarios")):
+    for metric in ("visit", "like", "comment"):
         targets = [b for b in cat.CATALOG if b.metric == metric and b.key not in earned]
         if not targets:
             continue
         streak = store.daily_streak(chat_id, metric, today)
         goal = min(b.target for b in targets if b.target)
-        lines.append(f"{label}: {streak} día(s) seguidos → faltan {max(goal - streak, 0)} para {goal}")
-    for metric, label in (("article_week", "📝 Artículos"), ("wish_vote_week", "💡 Votos a wishes")):
+        lines.append(
+            t(
+                lang,
+                "streak_days",
+                label=t(lang, f"metric_{metric}"),
+                streak=streak,
+                goal=goal,
+                missing=max(goal - streak, 0),
+            )
+        )
+    for metric in ("article_week", "wish_vote_week"):
         targets = [b for b in cat.CATALOG if b.metric == metric and b.key not in earned]
         if not targets:
             continue
         weeks = store.weekly_streak(chat_id, metric, today)
         goal = min(b.target for b in targets if b.target)
-        lines.append(f"{label}: {weeks} semana(s) seguidas → faltan {max(goal - weeks, 0)} para {goal}")
+        lines.append(
+            t(
+                lang,
+                "streak_weeks",
+                label=t(lang, f"metric_{metric}"),
+                streak=weeks,
+                goal=goal,
+                missing=max(goal - weeks, 0),
+            )
+        )
     return lines
 
 
-def daily_message(store: Store, chat_id: int, today: date, greeting: str | None = None) -> str:
+def daily_message(store: Store, chat_id: int, today: date, lang: str = "es") -> str:
+    lang = normalize(lang)
     earned = earned_keys(store, chat_id)
     done = store.tasks_done(chat_id, today)
     total_earned = store.badge_count(chat_id)
 
-    lines: list[str] = []
-    lines.append(greeting or "☀️ *Misión del día · Builder Center*")
-    lines.append(f"Progreso: *{total_earned}/{cat.TOTAL}*  `{progress_bar(total_earned, cat.TOTAL)}`")
-    lines.append("")
+    lines: list[str] = [t(lang, "daily_title"), progress_line(lang, total_earned), ""]
 
-    lines.append("*Rutina diaria (10 min)*")
-    for task, icon, text in cat.DAILY_ROUTINE:
+    lines.append(t(lang, "daily_routine"))
+    for task, icon, _es, _en, _link in cat.DAILY_ROUTINE:
         mark = "✅" if task in done else "⬜"
-        lines.append(f"{mark} {icon} {text}")
+        lines.append(f"{mark} {icon} {cat.routine_text(task, lang)}")
     lines.append("")
 
     targets = next_targets(earned)
     if targets:
-        lines.append("*Foco de hoy*")
+        lines.append(t(lang, "daily_focus"))
         for badge in targets:
-            lines.append(f"🎯 *{badge.name}* — {badge.how}")
+            lines.append(f"• *{badge.name}* — {badge.how(lang)}")
         lines.append("")
 
-    weekly = []
-    if "article_4w" not in earned and not _week_done(store, chat_id, "article_week", today):
-        weekly.append("📝 Publica el artículo de esta semana (racha de 4 semanas).")
-    if "wish_vote_4w" not in earned and not _week_done(store, chat_id, "wish_vote_week", today):
-        weekly.append("💡 Vota al menos un wish esta semana.")
+    weekly = [
+        f"{icon} {cat.routine_text(task, lang)}"
+        for task, icon, _es, _en, _link in cat.WEEKLY_ROUTINE
+        if _weekly_pending(store, chat_id, task, today, earned)
+    ]
     if weekly:
-        lines.append("*Pendientes de la semana*")
+        lines.append(t(lang, "daily_weekly"))
         lines.extend(weekly)
         lines.append("")
 
-    st = streak_lines(store, chat_id, today, earned)
+    st = streak_lines(store, chat_id, today, earned, lang)
     if st:
-        lines.append("*Rachas*")
+        lines.append(t(lang, "daily_streaks"))
         lines.extend(st)
         lines.append("")
 
-    lines.append(f"_{random.choice(MOTIVATION)}_")
-    lines.append("Marca lo que vayas haciendo con los botones 👇")
+    lines.append(f"_{motivation(lang)}_")
+    lines.append(t(lang, "daily_footer"))
     return "\n".join(lines)
 
 
-def _week_done(store: Store, chat_id: int, task: str, today: date) -> bool:
-    from datetime import timedelta
+_WEEKLY_BADGE = {"article_week": "article_4w", "wish_vote_week": "wish_vote_4w"}
 
+
+def _weekly_pending(store: Store, chat_id: int, task: str, today: date, earned: set[str]) -> bool:
+    if _WEEKLY_BADGE[task] in earned:
+        return False
+    return not _week_done(store, chat_id, task, today)
+
+
+def _week_done(store: Store, chat_id: int, task: str, today: date) -> bool:
     monday = today - timedelta(days=today.weekday())
     days = store.days_with_task(chat_id, task)
     return any(monday <= d <= today for d in days)
 
 
-def congrats_message(new_names: list[str], total: int, new_tiers: list[int]) -> str:
-    lines = [f"🎉 *{random.choice(CONGRATS)} Badge{'s' if len(new_names) > 1 else ''} nueva{'s' if len(new_names) > 1 else ''}:*"]
-    for name in new_names:
-        lines.append(f"🏅 {name}")
+def congrats_message(new_names: list[str], total: int, new_tiers: list[int], lang: str = "es") -> str:
+    lang = normalize(lang)
+    cheer = random.choice(CHEERS[lang])
+    key = "congrats_title_plural" if len(new_names) > 1 else "congrats_title"
+    lines = [t(lang, key, cheer=cheer)]
+    lines.extend(f"🏅 {name}" for name in new_names)
     lines.append("")
-    lines.append(f"Vas en *{total}/{cat.TOTAL}*  `{progress_bar(total, cat.TOTAL)}`")
+    lines.append(progress_line(lang, total))
     for tier in new_tiers:
         lines.append("")
-        lines.append(cat.REWARD_TIERS[tier])
+        lines.append(cat.REWARD_TIERS[lang][tier])
     lines.append("")
-    lines.append(f"_{random.choice(MOTIVATION)}_")
+    lines.append(f"_{motivation(lang)}_")
     return "\n".join(lines)

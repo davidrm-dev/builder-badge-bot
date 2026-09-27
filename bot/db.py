@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS users (
     hour        INTEGER NOT NULL DEFAULT 9,
     minute      INTEGER NOT NULL DEFAULT 0,
     enabled     INTEGER NOT NULL DEFAULT 1,
+    lang        TEXT NOT NULL DEFAULT 'es',
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS badges (
@@ -51,6 +52,7 @@ class User:
     hour: int
     minute: int
     enabled: bool
+    lang: str = "es"
 
 
 class Store:
@@ -60,7 +62,13 @@ class Store:
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(users)")}
+        if "lang" not in cols:
+            self._conn.execute("ALTER TABLE users ADD COLUMN lang TEXT NOT NULL DEFAULT 'es'")
 
     # ---------------- usuarios ----------------
     def ensure_user(self, chat_id: int) -> User:
@@ -89,6 +97,7 @@ class Store:
             hour=row["hour"],
             minute=row["minute"],
             enabled=bool(row["enabled"]),
+            lang=row["lang"],
         )
 
     def set_profile(self, chat_id: int, alias: str, bp_id: str, name: str) -> None:
@@ -104,6 +113,11 @@ class Store:
             "UPDATE users SET hour = ?, minute = ?, enabled = 1 WHERE chat_id = ?",
             (hour, minute, chat_id),
         )
+        self._conn.commit()
+
+    def set_lang(self, chat_id: int, lang: str) -> None:
+        self.ensure_user(chat_id)
+        self._conn.execute("UPDATE users SET lang = ? WHERE chat_id = ?", (lang, chat_id))
         self._conn.commit()
 
     def set_timezone(self, chat_id: int, tz: str) -> None:

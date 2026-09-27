@@ -27,7 +27,13 @@ otorga.
 - `/sync` – revisa badges nuevas
 - `/racha` – estado de rachas
 - `/hora 08:00`, `/zona America/Bogota` – ajustan el recordatorio diario
+- `/idioma` – cambia entre español e inglés (también `/language en`)
 - `/pausar`, `/activar`, `/borrar`
+
+Cada comando tiene su alias en inglés (`/today`, `/streak`, `/time`, `/timezone`, `/pause`…) y
+todos los textos viven en `bot/i18n.py`; agregar un idioma es añadir una clave a `STRINGS`.
+Los mensajes traen botones que abren directo la sección de Builder Center que toca (leer,
+escribir, wishlist, recompensas, tu perfil).
 
 ## Correr local
 

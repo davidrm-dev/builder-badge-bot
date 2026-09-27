@@ -23,7 +23,9 @@ from telegram.ext import (
 from . import badges as cat
 from . import builder_api as api
 from . import coach
+from .commands import register_commands
 from .db import Store, User
+from .i18n import LANG_NAMES, LANGS, normalize, t
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s - %(message)s", level=logging.INFO
@@ -46,22 +48,6 @@ def build_store():
 
 store = build_store()
 
-HELP = """*Comandos*
-/perfil `alias` – conecta tu perfil de Builder Center (o pega la URL)
-/badges – tu tablero con las 21 badges
-/hoy – misión de hoy
-/sync – revisa si ganaste badges nuevas
-/racha – estado de tus rachas
-/hora `HH:MM` – hora del recordatorio diario (ej. /hora 08:30)
-/zona `Area/Ciudad` – tu zona horaria (ej. /zona America/Bogota)
-/pausar – deja de recibir recordatorios
-/activar – vuelve a recibirlos
-/borrar – elimina tus datos
-
-Ojo: AWS solo publica las badges *ya ganadas*, no el progreso interno de cada racha.
-Por eso el bot lleva tu racha con los botones "hecho" de cada día y confirma las badges
-contra la API pública de Builder Center."""
-
 
 # --------------------------------------------------------------------------- utilidades
 def user_tz(user: User) -> ZoneInfo:
@@ -75,15 +61,34 @@ def today_for(user: User) -> date:
     return datetime.now(user_tz(user)).date()
 
 
-def routine_keyboard(chat_id: int, day: date) -> InlineKeyboardMarkup:
+def lang_of(chat_id: int) -> str:
+    user = store.get_user(chat_id)
+    return normalize(user.lang if user else None)
+
+
+def hhmm(user: User) -> str:
+    return f"{user.hour:02d}:{user.minute:02d}"
+
+
+def link_button(lang: str, key: str, link: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(t(lang, key), url=cat.LINKS[link])
+
+
+def lang_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(LANG_NAMES[code], callback_data=f"lang:{code}") for code in LANGS]]
+    )
+
+
+def routine_keyboard(chat_id: int, day: date, lang: str) -> InlineKeyboardMarkup:
     done = store.tasks_done(chat_id, day)
-    rows = []
-    row = []
-    for task, icon, _label in cat.DAILY_ROUTINE:
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for task, icon, _es, _en, _link in cat.DAILY_ROUTINE + cat.WEEKLY_ROUTINE:
         mark = "✅" if task in done else "⬜"
         row.append(
             InlineKeyboardButton(
-                f"{mark} {icon} {coach.TASK_LABEL[task]}", callback_data=f"done:{task}"
+                f"{mark} {icon} {t(lang, f'task_{task}')}", callback_data=f"done:{task}"
             )
         )
         if len(row) == 2:
@@ -91,16 +96,37 @@ def routine_keyboard(chat_id: int, day: date) -> InlineKeyboardMarkup:
             row = []
     if row:
         rows.append(row)
-    extra = []
-    for task in ("article_week", "wish_vote_week"):
-        mark = "✅" if task in done else "⬜"
-        icon = "📝" if task == "article_week" else "💡"
-        extra.append(
-            InlineKeyboardButton(f"{mark} {icon} {coach.TASK_LABEL[task]}", callback_data=f"done:{task}")
-        )
-    rows.append(extra)
-    rows.append([InlineKeyboardButton("🔄 Revisar badges", callback_data="sync")])
+    rows.append([link_button(lang, "btn_open", "home"), link_button(lang, "btn_read", "learn")])
+    rows.append([link_button(lang, "btn_write", "write"), link_button(lang, "btn_wishlist", "wishlist")])
+    rows.append([InlineKeyboardButton(t(lang, "btn_sync"), callback_data="sync")])
     return InlineKeyboardMarkup(rows)
+
+
+def board_keyboard(lang: str, alias: str | None) -> InlineKeyboardMarkup:
+    profile = cat.profile_url(alias) if alias else cat.LINKS["profile"]
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(t(lang, "btn_profile"), url=profile),
+                link_button(lang, "btn_rewards", "rewards"),
+            ],
+            [
+                InlineKeyboardButton(t(lang, "btn_today"), callback_data="today"),
+                InlineKeyboardButton(t(lang, "btn_sync"), callback_data="sync"),
+            ],
+        ]
+    )
+
+
+def welcome_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(t(lang, "btn_today"), callback_data="today"),
+                link_button(lang, "btn_open", "home"),
+            ]
+        ]
+    )
 
 
 def sync_badges(chat_id: int, notify_new: bool = True) -> tuple[list[str], int, list[int]]:
@@ -123,7 +149,7 @@ def sync_badges(chat_id: int, notify_new: bool = True) -> tuple[list[str], int, 
             badge.awarded_epoch,
         )
     total = store.badge_count(chat_id)
-    tiers = store.pending_tiers(chat_id, total, sorted(cat.REWARD_TIERS))
+    tiers = store.pending_tiers(chat_id, total, list(cat.TIER_VALUES))
     if not notify_new:
         return [], total, []
     return new_names, total, tiers
@@ -151,6 +177,7 @@ async def send_daily(bot, chat_id: int) -> None:
     user = store.get_user(chat_id)
     if not user or not user.enabled:
         return
+    lang = normalize(user.lang)
     try:
         new_names, total, tiers = sync_badges(chat_id)
     except api.BuilderApiError as exc:
@@ -159,22 +186,23 @@ async def send_daily(bot, chat_id: int) -> None:
     if new_names:
         await bot.send_message(
             chat_id,
-            coach.congrats_message(new_names, total, tiers),
+            coach.congrats_message(new_names, total, tiers, lang),
             parse_mode=ParseMode.MARKDOWN,
         )
     day = today_for(user)
     if total >= cat.TOTAL:
         await bot.send_message(
             chat_id,
-            "🏆 Ya tienes las 21 badges. Reclama tu voucher en Student Rewards y, si quieres, "
-            "usa /pausar para dejar de recibir recordatorios.",
+            t(lang, "finished"),
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup([[link_button(lang, "btn_rewards", "rewards")]]),
         )
         return
     await bot.send_message(
         chat_id,
-        coach.daily_message(store, chat_id, day),
+        coach.daily_message(store, chat_id, day, lang),
         parse_mode=ParseMode.MARKDOWN,
-        reply_markup=routine_keyboard(chat_id, day),
+        reply_markup=routine_keyboard(chat_id, day, lang),
     )
 
 
@@ -185,57 +213,87 @@ async def daily_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 # --------------------------------------------------------------------------- comandos
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
+    is_new = store.get_user(chat_id) is None
     store.ensure_user(chat_id)
+    from_user = update.effective_user
+    if is_new and from_user is not None and from_user.language_code:
+        store.set_lang(chat_id, normalize(from_user.language_code.split("-")[0]))
+        await update.message.reply_text(t("es", "choose_lang"), reply_markup=lang_keyboard())
+    lang = lang_of(chat_id)
     await update.message.reply_text(
-        "👋 Soy tu coach para las *21 badges* de AWS Builder Center.\n\n"
-        "1️⃣ Mándame tu usuario: `/perfil davidrm` (o pega la URL de tu perfil).\n"
-        "2️⃣ Elige la hora del recordatorio: `/hora 08:00`.\n"
-        "3️⃣ Cada día te digo exactamente qué hacer y marco tu racha.\n\n" + HELP,
-        parse_mode=ParseMode.MARKDOWN,
+        t(lang, "welcome"), parse_mode=ParseMode.MARKDOWN, reply_markup=welcome_keyboard(lang)
     )
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(HELP, parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(
+        t(lang_of(update.effective_chat.id), "help"), parse_mode=ParseMode.MARKDOWN
+    )
+
+
+async def cmd_lang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    store.ensure_user(chat_id)
+    if context.args and context.args[0].lower() in LANGS:
+        lang = context.args[0].lower()
+        store.set_lang(chat_id, lang)
+        await update.message.reply_text(t(lang, "lang_set"))
+        return
+    await update.message.reply_text(t("es", "choose_lang"), reply_markup=lang_keyboard())
 
 
 async def set_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, alias: str) -> None:
     chat_id = update.effective_chat.id
     store.ensure_user(chat_id)
+    lang = lang_of(chat_id)
     try:
         profile = api.get_profile(alias)
     except api.ProfileNotFound:
         await update.message.reply_text(
-            f"No encontré el perfil `{alias}` 🤔 Revisa el alias en la URL de tu perfil "
-            "(builder.aws.com/community/@tualias).",
-            parse_mode=ParseMode.MARKDOWN,
+            t(lang, "profile_not_found", alias=alias), parse_mode=ParseMode.MARKDOWN
         )
         return
     except api.BuilderApiError as exc:
-        await update.message.reply_text(f"Builder Center no respondió ({exc}). Intenta de nuevo.")
+        await update.message.reply_text(t(lang, "api_down", error=exc))
         return
     store.set_profile(chat_id, profile.alias, profile.builder_profile_id, profile.name)
     first_time = store.badge_count(chat_id) == 0
     try:
-        _new_names, total, _tiers = sync_badges(chat_id, notify_new=not first_time)
+        _new, total, _tiers = sync_badges(chat_id, notify_new=not first_time)
     except api.BuilderApiError:
         total = store.badge_count(chat_id)
     user = store.get_user(chat_id)
     schedule_user(context.application, user)
+    targets = coach.next_targets(coach.earned_keys(store, chat_id), limit=1)
+    hint = (
+        t(lang, "next_hint", badge=targets[0].name, how=targets[0].how(lang))
+        if targets
+        else t(lang, "all_done_hint")
+    )
     await update.message.reply_text(
-        f"✅ Conectado: *{profile.name}* (@{profile.alias})\n"
-        f"Detecté *{total}/{cat.TOTAL}* badges ganadas.\n"
-        f"Recordatorio diario: *{user.hour:02d}:{user.minute:02d}* ({user.tz}) — cámbialo con /hora.\n\n"
-        "Mira tu tablero con /badges o pide la misión de hoy con /hoy.",
+        t(
+            lang,
+            "profile_ok",
+            name=profile.name,
+            alias=profile.alias,
+            total=total,
+            max=cat.TOTAL,
+            bar=coach.progress_bar(total, cat.TOTAL),
+            hour=hhmm(user),
+            tz=user.tz,
+            next_hint=hint,
+        ),
         parse_mode=ParseMode.MARKDOWN,
+        reply_markup=board_keyboard(lang, profile.alias),
     )
 
 
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    lang = lang_of(update.effective_chat.id)
     if not context.args:
-        await update.message.reply_text("Usa: `/perfil davidrm`", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(t(lang, "profile_usage"), parse_mode=ParseMode.MARKDOWN)
         return
-    await set_profile(update, context, context.args[0])
+    await set_profile(update, context, context.args[0].lstrip("@"))
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -245,9 +303,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await set_profile(update, context, match.group(1))
         return
     if re.fullmatch(r"@?[\w.\-]{2,40}", text):
-        await set_profile(update, context, text)
+        await set_profile(update, context, text.lstrip("@"))
         return
-    await update.message.reply_text("No te entendí 🙃 Escribe /ayuda para ver los comandos.")
+    await update.message.reply_text(t(lang_of(update.effective_chat.id), "not_understood"))
 
 
 def require_profile(update: Update) -> User | None:
@@ -257,100 +315,115 @@ def require_profile(update: Update) -> User | None:
     return user
 
 
+async def ask_profile(update: Update) -> None:
+    await update.message.reply_text(
+        t(lang_of(update.effective_chat.id), "need_profile"), parse_mode=ParseMode.MARKDOWN
+    )
+
+
 async def cmd_badges(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = require_profile(update)
     if not user:
-        await update.message.reply_text("Primero conecta tu perfil: `/perfil tualias`", parse_mode=ParseMode.MARKDOWN)
+        await ask_profile(update)
         return
     try:
         sync_badges(user.chat_id, notify_new=False)
     except api.BuilderApiError:
         pass
+    lang = normalize(user.lang)
     await update.message.reply_text(
-        coach.badge_overview(store, user.chat_id), parse_mode=ParseMode.MARKDOWN
+        coach.badge_overview(store, user.chat_id, lang),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=board_keyboard(lang, user.alias),
     )
 
 
 async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = require_profile(update)
     if not user:
-        await update.message.reply_text("Primero conecta tu perfil: `/perfil tualias`", parse_mode=ParseMode.MARKDOWN)
+        await ask_profile(update)
         return
     day = today_for(user)
+    lang = normalize(user.lang)
     await update.message.reply_text(
-        coach.daily_message(store, user.chat_id, day),
+        coach.daily_message(store, user.chat_id, day, lang),
         parse_mode=ParseMode.MARKDOWN,
-        reply_markup=routine_keyboard(user.chat_id, day),
+        reply_markup=routine_keyboard(user.chat_id, day, lang),
     )
 
 
 async def cmd_sync(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = require_profile(update)
     if not user:
-        await update.message.reply_text("Primero conecta tu perfil: `/perfil tualias`", parse_mode=ParseMode.MARKDOWN)
+        await ask_profile(update)
         return
+    lang = normalize(user.lang)
     try:
         new_names, total, tiers = sync_badges(user.chat_id)
     except api.BuilderApiError as exc:
-        await update.message.reply_text(f"Builder Center no respondió ({exc}).")
+        await update.message.reply_text(t(lang, "api_down", error=exc))
         return
     if new_names:
         await update.message.reply_text(
-            coach.congrats_message(new_names, total, tiers), parse_mode=ParseMode.MARKDOWN
+            coach.congrats_message(new_names, total, tiers, lang), parse_mode=ParseMode.MARKDOWN
         )
     else:
         await update.message.reply_text(
-            f"Sin novedades: sigues en *{total}/{cat.TOTAL}*. "
-            "Las badges pueden tardar un rato en aparecer después de la acción.",
-            parse_mode=ParseMode.MARKDOWN,
+            t(lang, "no_news", total=total, max=cat.TOTAL), parse_mode=ParseMode.MARKDOWN
         )
 
 
 async def cmd_streak(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = require_profile(update)
     if not user:
-        await update.message.reply_text("Primero conecta tu perfil: `/perfil tualias`", parse_mode=ParseMode.MARKDOWN)
+        await ask_profile(update)
         return
+    lang = normalize(user.lang)
     day = today_for(user)
     earned = coach.earned_keys(store, user.chat_id)
-    lines = coach.streak_lines(store, user.chat_id, day, earned)
+    lines = coach.streak_lines(store, user.chat_id, day, earned, lang)
+    body = "\n".join(lines) if lines else t(lang, "streaks_none")
     await update.message.reply_text(
-        "*Tus rachas*\n" + ("\n".join(lines) if lines else "¡Ya tienes todas las badges de racha! 🔥"),
+        f"{t(lang, 'streaks_title')}\n{body}\n\n{t(lang, 'streaks_hint')}",
         parse_mode=ParseMode.MARKDOWN,
+        reply_markup=routine_keyboard(user.chat_id, day, lang),
     )
 
 
 async def cmd_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     store.ensure_user(chat_id)
+    lang = lang_of(chat_id)
     if not context.args or not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", context.args[0]):
-        await update.message.reply_text("Usa: `/hora 08:30`", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(t(lang, "time_usage"), parse_mode=ParseMode.MARKDOWN)
         return
     hour, minute = (int(x) for x in context.args[0].split(":"))
     store.set_schedule(chat_id, hour, minute)
     user = store.get_user(chat_id)
     schedule_user(context.application, user)
     await update.message.reply_text(
-        f"⏰ Listo, te escribo todos los días a las *{hour:02d}:{minute:02d}* ({user.tz}).",
-        parse_mode=ParseMode.MARKDOWN,
+        t(lang, "time_set", hour=hhmm(user), tz=user.tz), parse_mode=ParseMode.MARKDOWN
     )
 
 
 async def cmd_tz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     store.ensure_user(chat_id)
+    lang = lang_of(chat_id)
     if not context.args:
-        await update.message.reply_text("Usa: `/zona America/Bogota`", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(t(lang, "tz_usage"), parse_mode=ParseMode.MARKDOWN)
         return
     try:
         ZoneInfo(context.args[0])
     except (ZoneInfoNotFoundError, ValueError):
-        await update.message.reply_text("Zona horaria inválida. Ejemplo: `America/Bogota`", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(t(lang, "tz_invalid"), parse_mode=ParseMode.MARKDOWN)
         return
     store.set_timezone(chat_id, context.args[0])
     user = store.get_user(chat_id)
     schedule_user(context.application, user)
-    await update.message.reply_text(f"🌎 Zona horaria: *{user.tz}*", parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(
+        t(lang, "tz_set", tz=user.tz, hour=hhmm(user)), parse_mode=ParseMode.MARKDOWN
+    )
 
 
 async def cmd_pause(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -358,7 +431,7 @@ async def cmd_pause(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     store.ensure_user(chat_id)
     store.set_enabled(chat_id, False)
     schedule_user(context.application, store.get_user(chat_id))
-    await update.message.reply_text("⏸️ Recordatorios pausados. Vuelve con /activar.")
+    await update.message.reply_text(t(lang_of(chat_id), "paused"))
 
 
 async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -368,64 +441,92 @@ async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     user = store.get_user(chat_id)
     schedule_user(context.application, user)
     await update.message.reply_text(
-        f"▶️ Recordatorios activos a las *{user.hour:02d}:{user.minute:02d}* ({user.tz}).",
+        t(normalize(user.lang), "resumed", hour=hhmm(user), tz=user.tz),
         parse_mode=ParseMode.MARKDOWN,
     )
 
 
 async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
+    lang = lang_of(chat_id)
     store.delete_user(chat_id)
     if context.application.job_queue is not None:
         for job in context.application.job_queue.get_jobs_by_name(f"daily:{chat_id}"):
             job.schedule_removal()
-    await update.message.reply_text("🗑️ Datos eliminados. Empieza de nuevo con /start.")
+    await update.message.reply_text(t(lang, "deleted"))
 
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     chat_id = query.message.chat_id
+
+    if query.data.startswith("lang:"):
+        lang = normalize(query.data.split(":", 1)[1])
+        store.ensure_user(chat_id)
+        store.set_lang(chat_id, lang)
+        await query.answer(t(lang, "lang_set"))
+        await context.bot.send_message(
+            chat_id,
+            t(lang, "welcome"),
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=welcome_keyboard(lang),
+        )
+        return
+
     user = store.get_user(chat_id)
     if not user:
-        await query.answer("Escribe /start primero")
+        await query.answer(t("es", "cb_start_first"))
         return
+    lang = normalize(user.lang)
     day = today_for(user)
+
+    if query.data == "today":
+        await query.answer()
+        await context.bot.send_message(
+            chat_id,
+            coach.daily_message(store, chat_id, day, lang),
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=routine_keyboard(chat_id, day, lang),
+        )
+        return
 
     if query.data == "sync":
         try:
             new_names, total, tiers = sync_badges(chat_id)
         except api.BuilderApiError as exc:
-            await query.answer(f"API no disponible ({exc})", show_alert=True)
+            await query.answer(t(lang, "api_down", error=exc), show_alert=True)
             return
         if new_names:
-            await query.answer("¡Badge nueva! 🎉")
+            await query.answer(t(lang, "cb_new_badge"))
             await context.bot.send_message(
-                chat_id, coach.congrats_message(new_names, total, tiers), parse_mode=ParseMode.MARKDOWN
+                chat_id,
+                coach.congrats_message(new_names, total, tiers, lang),
+                parse_mode=ParseMode.MARKDOWN,
             )
         else:
-            await query.answer(f"Sigues en {total}/{cat.TOTAL}")
+            await query.answer(t(lang, "cb_same", total=total, max=cat.TOTAL))
         return
 
     if query.data.startswith("done:"):
         task = query.data.split(":", 1)[1]
         if task in store.tasks_done(chat_id, day):
             store.remove_checkin(chat_id, day, task)
-            await query.answer("Desmarcado")
+            await query.answer(t(lang, "cb_undone"))
         else:
             store.add_checkin(chat_id, day, task)
             streak = store.daily_streak(chat_id, task, day)
             if task in {"visit", "like", "comment"} and streak in (7, 30, 90):
-                await query.answer(f"🔥 ¡{streak} días seguidos!", show_alert=True)
+                await query.answer(t(lang, "cb_streak", days=streak), show_alert=True)
             else:
-                await query.answer("¡Hecho! ✅")
+                await query.answer(t(lang, "cb_done"))
         try:
             await query.edit_message_text(
-                coach.daily_message(store, chat_id, day),
+                coach.daily_message(store, chat_id, day, lang),
                 parse_mode=ParseMode.MARKDOWN,
-                reply_markup=routine_keyboard(chat_id, day),
+                reply_markup=routine_keyboard(chat_id, day, lang),
             )
         except BadRequest:  # el mensaje puede no haber cambiado
-            await query.edit_message_reply_markup(reply_markup=routine_keyboard(chat_id, day))
+            await query.edit_message_reply_markup(reply_markup=routine_keyboard(chat_id, day, lang))
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -433,6 +534,7 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def post_init(app: Application) -> None:
+    await register_commands(app.bot)
     for user in store.all_users():
         schedule_user(app, user)
     log.info("Jobs programados para %d usuario(s)", len(store.all_users()))
@@ -447,16 +549,17 @@ def build_app(token: str, *, with_jobs: bool = True) -> Application:
     app = builder.build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler(["ayuda", "help"], cmd_help))
+    app.add_handler(CommandHandler(["idioma", "language", "lang"], cmd_lang))
     app.add_handler(CommandHandler(["perfil", "profile", "alias"], cmd_profile))
     app.add_handler(CommandHandler("badges", cmd_badges))
     app.add_handler(CommandHandler(["hoy", "today", "mision"], cmd_today))
     app.add_handler(CommandHandler("sync", cmd_sync))
-    app.add_handler(CommandHandler(["racha", "rachas"], cmd_streak))
-    app.add_handler(CommandHandler("hora", cmd_time))
-    app.add_handler(CommandHandler(["zona", "tz"], cmd_tz))
-    app.add_handler(CommandHandler("pausar", cmd_pause))
-    app.add_handler(CommandHandler("activar", cmd_resume))
-    app.add_handler(CommandHandler("borrar", cmd_delete))
+    app.add_handler(CommandHandler(["racha", "rachas", "streak"], cmd_streak))
+    app.add_handler(CommandHandler(["hora", "time"], cmd_time))
+    app.add_handler(CommandHandler(["zona", "timezone", "tz"], cmd_tz))
+    app.add_handler(CommandHandler(["pausar", "pause"], cmd_pause))
+    app.add_handler(CommandHandler(["activar", "resume"], cmd_resume))
+    app.add_handler(CommandHandler(["borrar", "delete"], cmd_delete))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_error_handler(on_error)

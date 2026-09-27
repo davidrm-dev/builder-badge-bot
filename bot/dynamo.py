@@ -84,6 +84,7 @@ class DynamoStore:
             hour=_num(item.get("hour"), 9),
             minute=_num(item.get("minute")),
             enabled=bool(item.get("enabled", True)),
+            lang=item.get("lang") or "es",
         )
 
     def _update_profile(self, chat_id: int, values: dict) -> None:
@@ -105,6 +106,9 @@ class DynamoStore:
 
     def set_timezone(self, chat_id: int, tz: str) -> None:
         self._update_profile(chat_id, {"tz": tz})
+
+    def set_lang(self, chat_id: int, lang: str) -> None:
+        self._update_profile(chat_id, {"lang": lang})
 
     def set_enabled(self, chat_id: int, enabled: bool) -> None:
         self._update_profile(chat_id, {"enabled": enabled})
