@@ -98,8 +98,42 @@ def routine_keyboard(chat_id: int, day: date, lang: str) -> InlineKeyboardMarkup
         rows.append(row)
     rows.append([link_button(lang, "btn_open", "home"), link_button(lang, "btn_read", "learn")])
     rows.append([link_button(lang, "btn_write", "write"), link_button(lang, "btn_wishlist", "wishlist")])
-    rows.append([InlineKeyboardButton(t(lang, "btn_sync"), callback_data="sync")])
+    rows.append([
+        InlineKeyboardButton(t(lang, "btn_sync"), callback_data="sync"),
+        InlineKeyboardButton(t(lang, "btn_adv"), callback_data="adv"),
+    ])
     return InlineKeyboardMarkup(rows)
+
+
+# Métricas ajustables manualmente (rachas diarias únicamente)
+_ADV_METRICS: tuple[tuple[str, str], ...] = (
+    ("visit", "🔑"),
+    ("like", "❤️"),
+    ("comment", "💬"),
+)
+
+
+def adv_metric_keyboard(lang: str) -> InlineKeyboardMarkup:
+    """Teclado para seleccionar qué métrica ajustar."""
+    rows = [
+        [InlineKeyboardButton(
+            f"{icon} {t(lang, f'metric_{metric}')}",
+            callback_data=f"adv:{metric}"
+        )]
+        for metric, icon in _ADV_METRICS
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def adv_action_keyboard(lang: str, metric: str) -> InlineKeyboardMarkup:
+    """Teclado de acciones para una métrica concreta."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(t(lang, "btn_adv_set"), callback_data=f"adv:set:{metric}"),
+            InlineKeyboardButton(t(lang, "btn_adv_reset"), callback_data=f"adv:reset:{metric}"),
+        ],
+        [InlineKeyboardButton(t(lang, "btn_adv_back"), callback_data="adv")],
+    ])
 
 
 def board_keyboard(lang: str, alias: str | None) -> InlineKeyboardMarkup:
@@ -298,6 +332,43 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (update.message.text or "").strip()
+
+    # ---- Estado de conversación: esperando número de días para ajustar racha ----
+    pending = getattr(context, "user_data", {}).get("pending_streak_set")
+    if pending and pending.get("chat_id") == update.effective_chat.id:
+        metric = pending["metric"]
+        lang = lang_of(update.effective_chat.id)
+        label = t(lang, f"metric_{metric}")
+        user = store.get_user(update.effective_chat.id)
+        today = today_for(user) if user else date.today()
+
+        if not text.isdigit() or int(text) < 1:
+            await update.message.reply_text(
+                t(lang, "adv_set_invalid"), parse_mode=ParseMode.MARKDOWN
+            )
+            return  # Mantenemos el estado pendiente para reintentar
+
+        days = int(text)
+        # El máximo útil es el target más alto de esa métrica (90 días)
+        max_target = max(
+            (b.target for b in cat.CATALOG if b.metric == metric and b.target),
+            default=90,
+        )
+        if days > max_target:
+            await update.message.reply_text(
+                t(lang, "adv_set_too_big", max=max_target), parse_mode=ParseMode.MARKDOWN
+            )
+            return  # También mantenemos estado, el usuario puede corregir
+
+        store.set_streak(update.effective_chat.id, metric, days, today)
+        if hasattr(context, "user_data"):
+            context.user_data.pop("pending_streak_set", None)
+        await update.message.reply_text(
+            t(lang, "adv_set_ok", label=label, days=days), parse_mode=ParseMode.MARKDOWN
+        )
+        return
+    # ---- Fin estado de conversación ----
+
     match = re.search(r"builder\.aws\.com/community/@([\w.\-]+)", text)
     if match:
         await set_profile(update, context, match.group(1))
@@ -507,6 +578,84 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await query.answer(t(lang, "cb_same", total=total, max=cat.TOTAL))
         return
 
+    # ------------------------------------------------------------------ opciones avanzadas
+    if query.data == "adv":
+        # Menú principal de opciones avanzadas: selección de métrica
+        await query.answer()
+        earned = coach.earned_keys(store, chat_id)
+        # Solo mostrar métricas que aún tienen badges pendientes
+        pending_metrics = [
+            (metric, icon) for metric, icon in _ADV_METRICS
+            if any(b.metric == metric and b.key not in earned for b in cat.CATALOG)
+        ]
+        if not pending_metrics:
+            await query.answer(t(lang, "streaks_none"), show_alert=True)
+            return
+        try:
+            await query.edit_message_text(
+                t(lang, "adv_title"),
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=adv_metric_keyboard(lang),
+            )
+        except BadRequest:
+            pass
+        return
+
+    if query.data.startswith("adv:") and not query.data.startswith("adv:set:") and not query.data.startswith("adv:reset:"):
+        # Pantalla de acción para una métrica concreta: muestra racha actual y opciones
+        metric = query.data.split(":", 1)[1]
+        valid_metrics = {m for m, _ in _ADV_METRICS}
+        if metric not in valid_metrics:
+            await query.answer()
+            return
+        await query.answer()
+        streak = store.daily_streak(chat_id, metric, day)
+        label = t(lang, f"metric_{metric}")
+        try:
+            await query.edit_message_text(
+                t(lang, "adv_metric_title", label=label, streak=streak),
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=adv_action_keyboard(lang, metric),
+            )
+        except BadRequest:
+            pass
+        return
+
+    if query.data.startswith("adv:set:"):
+        # El usuario quiere fijar el número de días: pedimos el número por chat
+        metric = query.data.split(":", 2)[2]
+        await query.answer()
+        label = t(lang, f"metric_{metric}")
+        # Guardamos el estado: esperamos un número de este usuario para esta métrica
+        context.user_data["pending_streak_set"] = {"metric": metric, "chat_id": chat_id}
+        await context.bot.send_message(
+            chat_id,
+            t(lang, "adv_set_prompt", label=label),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+
+    if query.data.startswith("adv:reset:"):
+        # Reiniciar racha: borra sintéticos, arranca desde 0
+        metric = query.data.split(":", 2)[2]
+        await query.answer()
+        store.reset_streak(chat_id, metric, day)
+        label = t(lang, f"metric_{metric}")
+        try:
+            await query.edit_message_text(
+                t(lang, "adv_reset_ok", label=label),
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=adv_metric_keyboard(lang),
+            )
+        except BadRequest:
+            await context.bot.send_message(
+                chat_id,
+                t(lang, "adv_reset_ok", label=label),
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        return
+
+    # ------------------------------------------------------------------ check-ins de rutina
     if query.data.startswith("done:"):
         task = query.data.split(":", 1)[1]
         if task in store.tasks_done(chat_id, day):
@@ -514,11 +663,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await query.answer(t(lang, "cb_undone"))
         else:
             store.add_checkin(chat_id, day, task)
-            streak = store.daily_streak(chat_id, task, day)
-            if task in {"visit", "like", "comment"} and streak in (7, 30, 90):
-                await query.answer(t(lang, "cb_streak", days=streak), show_alert=True)
-            else:
-                await query.answer(t(lang, "cb_done"))
+            # Mostrar siempre la racha actualizada para tareas con métrica de racha.
+            # Para tareas sin racha (read) se muestra cb_done genérico.
+            feedback = coach.streak_feedback(store, chat_id, task, day, lang)
+            await query.answer(feedback, show_alert=bool(feedback != t(lang, "cb_done")))
         try:
             await query.edit_message_text(
                 coach.daily_message(store, chat_id, day, lang),

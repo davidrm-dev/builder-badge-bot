@@ -23,8 +23,11 @@ WINDOW_MIN = int(os.environ.get("SCHEDULE_WINDOW_MINUTES", "15"))
 
 def _due(user, now: datetime) -> bool:
     minutes_now = now.hour * 60 + now.minute
-    delta = minutes_now - (user.hour * 60 + user.minute)
-    return 0 <= delta < WINDOW_MIN
+    user_min = user.hour * 60 + user.minute
+    # Aritmética modular para manejar el rollover de medianoche
+    # (ej. usuario a las 23:55, scheduler corre a las 00:05 → delta=10, correcto)
+    delta = (minutes_now - user_min) % 1440
+    return delta < WINDOW_MIN
 
 
 async def _run() -> int:

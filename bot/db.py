@@ -29,9 +29,10 @@ CREATE TABLE IF NOT EXISTS badges (
     PRIMARY KEY (chat_id, badge_id)
 );
 CREATE TABLE IF NOT EXISTS checkins (
-    chat_id INTEGER NOT NULL,
-    day     TEXT NOT NULL,
-    task    TEXT NOT NULL,
+    chat_id   INTEGER NOT NULL,
+    day       TEXT NOT NULL,
+    task      TEXT NOT NULL,
+    synthetic INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (chat_id, day, task)
 );
 CREATE TABLE IF NOT EXISTS tiers (
@@ -69,6 +70,9 @@ class Store:
         cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(users)")}
         if "lang" not in cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN lang TEXT NOT NULL DEFAULT 'es'")
+        checkin_cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(checkins)")}
+        if "synthetic" not in checkin_cols:
+            self._conn.execute("ALTER TABLE checkins ADD COLUMN synthetic INTEGER NOT NULL DEFAULT 0")
 
     # ---------------- usuarios ----------------
     def ensure_user(self, chat_id: int) -> User:
@@ -199,6 +203,35 @@ class Store:
             "SELECT day FROM checkins WHERE chat_id = ? AND task = ?", (chat_id, task)
         )
         return {date.fromisoformat(r["day"]) for r in rows}
+
+    def set_streak(self, chat_id: int, task: str, days: int, today: date) -> None:
+        """Ajusta la racha de `task` a `days` días rellenando hacia atrás con check-ins sintéticos.
+
+        - Borra los check-ins sintéticos anteriores a hoy para esa tarea (limpia ajuste previo).
+        - Inserta check-ins sintéticos en los (days - 1) días anteriores a hoy que falten.
+        - No toca los check-ins reales (synthetic=0) del usuario.
+        """
+        # 1. Borrar sintéticos pasados para empezar limpio
+        self._conn.execute(
+            "DELETE FROM checkins WHERE chat_id = ? AND task = ? AND day < ? AND synthetic = 1",
+            (chat_id, task, today.isoformat()),
+        )
+        # 2. Insertar sintéticos para los días que falten
+        for offset in range(1, days):
+            day = today - timedelta(days=offset)
+            self._conn.execute(
+                "INSERT OR IGNORE INTO checkins (chat_id, day, task, synthetic) VALUES (?, ?, ?, 1)",
+                (chat_id, day.isoformat(), task),
+            )
+        self._conn.commit()
+
+    def reset_streak(self, chat_id: int, task: str, today: date) -> None:
+        """Reinicia la racha borrando todos los check-ins sintéticos anteriores a hoy."""
+        self._conn.execute(
+            "DELETE FROM checkins WHERE chat_id = ? AND task = ? AND day < ? AND synthetic = 1",
+            (chat_id, task, today.isoformat()),
+        )
+        self._conn.commit()
 
     def daily_streak(self, chat_id: int, task: str, today: date) -> int:
         """Días consecutivos con el task hecho, contando hasta hoy (o ayer si hoy falta)."""

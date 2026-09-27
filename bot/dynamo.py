@@ -169,18 +169,22 @@ class DynamoStore:
 
     # ---------------- check-ins ----------------
     def add_checkin(self, chat_id: int, day: date, task: str) -> bool:
-        if task in self.tasks_done(chat_id, day):
-            return False
         ttl = int((datetime.now(timezone.utc) + timedelta(days=CHECKIN_TTL_DAYS)).timestamp())
-        self.table.put_item(
-            Item={
-                "pk": _pk(chat_id),
-                "sk": f"CHK#{day.isoformat()}#{task}",
-                "day": day.isoformat(),
-                "task": task,
-                "ttl": ttl,
-            }
-        )
+        try:
+            self.table.put_item(
+                Item={
+                    "pk": _pk(chat_id),
+                    "sk": f"CHK#{day.isoformat()}#{task}",
+                    "day": day.isoformat(),
+                    "task": task,
+                    "ttl": ttl,
+                },
+                # Escritura atómica: falla si el ítem ya existe, evita race condition
+                # entre dos taps simultáneos sobre el mismo botón.
+                ConditionExpression=Attr("sk").not_exists(),
+            )
+        except self.table.meta.client.exceptions.ConditionalCheckFailedException:
+            return False
         return True
 
     def remove_checkin(self, chat_id: int, day: date, task: str) -> None:
@@ -194,6 +198,55 @@ class DynamoStore:
         return {
             date.fromisoformat(i["day"]) for i in self._items(chat_id, "CHK#") if i["task"] == task
         }
+
+    def set_streak(self, chat_id: int, task: str, days: int, today: date) -> None:
+        """Ajusta la racha de `task` a `days` días rellenando hacia atrás con check-ins sintéticos.
+
+        - Borra los sintéticos anteriores a hoy para limpiar un ajuste previo.
+        - Inserta sintéticos para los (days - 1) días anteriores que falten.
+        - No toca check-ins reales (synthetic=False).
+        """
+        # 1. Borrar sintéticos pasados
+        past_synth = [
+            i for i in self._items(chat_id, "CHK#")
+            if i["task"] == task
+            and i.get("synthetic")
+            and i["day"] < today.isoformat()
+        ]
+        for item in past_synth:
+            self.table.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
+
+        # 2. Insertar sintéticos faltantes
+        ttl = int((datetime.now(timezone.utc) + timedelta(days=CHECKIN_TTL_DAYS)).timestamp())
+        for offset in range(1, days):
+            day = today - timedelta(days=offset)
+            sk = f"CHK#{day.isoformat()}#{task}"
+            try:
+                self.table.put_item(
+                    Item={
+                        "pk": _pk(chat_id),
+                        "sk": sk,
+                        "day": day.isoformat(),
+                        "task": task,
+                        "synthetic": True,
+                        "ttl": ttl,
+                    },
+                    # No sobreescribir un check-in real que el usuario ya marcó
+                    ConditionExpression=Attr("sk").not_exists(),
+                )
+            except self.table.meta.client.exceptions.ConditionalCheckFailedException:
+                pass  # ya existe un check-in real para ese día — perfecto, no hace falta el sintético
+
+    def reset_streak(self, chat_id: int, task: str, today: date) -> None:
+        """Reinicia la racha borrando todos los check-ins sintéticos anteriores a hoy."""
+        past_synth = [
+            i for i in self._items(chat_id, "CHK#")
+            if i["task"] == task
+            and i.get("synthetic")
+            and i["day"] < today.isoformat()
+        ]
+        for item in past_synth:
+            self.table.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
 
     def daily_streak(self, chat_id: int, task: str, today: date) -> int:
         days = self.days_with_task(chat_id, task)
