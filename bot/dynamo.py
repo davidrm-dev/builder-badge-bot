@@ -202,23 +202,15 @@ class DynamoStore:
     def set_streak(self, chat_id: int, task: str, days: int, today: date) -> None:
         """Ajusta la racha de `task` a `days` días rellenando hacia atrás con check-ins sintéticos.
 
-        - Borra los sintéticos anteriores a hoy para limpiar un ajuste previo.
-        - Inserta sintéticos para los (days - 1) días anteriores que falten.
+        - Borra los sintéticos de hoy hacia atrás para limpiar un ajuste previo.
+        - Inserta sintéticos para los `days` días que terminan hoy, incluido hoy: la racha
+          declarada cuenta el día actual, y sin él la cadena se rompe mañana.
         - No toca check-ins reales (synthetic=False).
         """
-        # 1. Borrar sintéticos pasados
-        past_synth = [
-            i for i in self._items(chat_id, "CHK#")
-            if i["task"] == task
-            and i.get("synthetic")
-            and i["day"] < today.isoformat()
-        ]
-        for item in past_synth:
-            self.table.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
+        self._delete_synthetics(chat_id, task, today)
 
-        # 2. Insertar sintéticos faltantes
         ttl = int((datetime.now(timezone.utc) + timedelta(days=CHECKIN_TTL_DAYS)).timestamp())
-        for offset in range(1, days):
+        for offset in range(days):
             day = today - timedelta(days=offset)
             sk = f"CHK#{day.isoformat()}#{task}"
             try:
@@ -238,14 +230,15 @@ class DynamoStore:
                 pass  # ya existe un check-in real para ese día — perfecto, no hace falta el sintético
 
     def reset_streak(self, chat_id: int, task: str, today: date) -> None:
-        """Reinicia la racha borrando todos los check-ins sintéticos anteriores a hoy."""
-        past_synth = [
+        """Reinicia la racha borrando todos los check-ins sintéticos de hoy hacia atrás."""
+        self._delete_synthetics(chat_id, task, today)
+
+    def _delete_synthetics(self, chat_id: int, task: str, until: date) -> None:
+        synthetic = [
             i for i in self._items(chat_id, "CHK#")
-            if i["task"] == task
-            and i.get("synthetic")
-            and i["day"] < today.isoformat()
+            if i["task"] == task and i.get("synthetic") and i["day"] <= until.isoformat()
         ]
-        for item in past_synth:
+        for item in synthetic:
             self.table.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
 
     def daily_streak(self, chat_id: int, task: str, today: date) -> int:

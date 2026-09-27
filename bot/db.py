@@ -207,17 +207,18 @@ class Store:
     def set_streak(self, chat_id: int, task: str, days: int, today: date) -> None:
         """Ajusta la racha de `task` a `days` días rellenando hacia atrás con check-ins sintéticos.
 
-        - Borra los check-ins sintéticos anteriores a hoy para esa tarea (limpia ajuste previo).
-        - Inserta check-ins sintéticos en los (days - 1) días anteriores a hoy que falten.
+        - Borra los check-ins sintéticos de hoy hacia atrás (limpia un ajuste previo).
+        - Inserta check-ins sintéticos en los `days` días que terminan hoy, incluido hoy: la
+          racha declarada cuenta el día actual, y sin él la cadena se rompe mañana.
         - No toca los check-ins reales (synthetic=0) del usuario.
         """
-        # 1. Borrar sintéticos pasados para empezar limpio
+        # 1. Borrar sintéticos previos para empezar limpio
         self._conn.execute(
-            "DELETE FROM checkins WHERE chat_id = ? AND task = ? AND day < ? AND synthetic = 1",
+            "DELETE FROM checkins WHERE chat_id = ? AND task = ? AND day <= ? AND synthetic = 1",
             (chat_id, task, today.isoformat()),
         )
         # 2. Insertar sintéticos para los días que falten
-        for offset in range(1, days):
+        for offset in range(days):
             day = today - timedelta(days=offset)
             self._conn.execute(
                 "INSERT OR IGNORE INTO checkins (chat_id, day, task, synthetic) VALUES (?, ?, ?, 1)",
@@ -226,9 +227,9 @@ class Store:
         self._conn.commit()
 
     def reset_streak(self, chat_id: int, task: str, today: date) -> None:
-        """Reinicia la racha borrando todos los check-ins sintéticos anteriores a hoy."""
+        """Reinicia la racha borrando todos los check-ins sintéticos de hoy hacia atrás."""
         self._conn.execute(
-            "DELETE FROM checkins WHERE chat_id = ? AND task = ? AND day < ? AND synthetic = 1",
+            "DELETE FROM checkins WHERE chat_id = ? AND task = ? AND day <= ? AND synthetic = 1",
             (chat_id, task, today.isoformat()),
         )
         self._conn.commit()

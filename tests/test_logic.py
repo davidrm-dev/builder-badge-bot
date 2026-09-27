@@ -95,10 +95,10 @@ def test_set_streak_fills_synthetic_checkins(store):
     chat = 10
     store.ensure_user(chat)
     today = date(2026, 9, 26)
-    # Fijar racha de 5 días: debe insertar 4 días sintéticos hacia atrás
+    # Fijar racha de 5 días: los 5 días terminan hoy, incluido hoy
     store.set_streak(chat, "visit", 5, today)
-    assert store.daily_streak(chat, "visit", today) == 4  # hoy aún no marcado
-    # Marcar hoy → racha completa de 5
+    assert store.daily_streak(chat, "visit", today) == 5
+    # Marcar hoy de verdad no la duplica
     store.add_checkin(chat, today, "visit")
     assert store.daily_streak(chat, "visit", today) == 5
 
@@ -111,7 +111,6 @@ def test_set_streak_does_not_overwrite_real_checkins(store):
     store.add_checkin(chat, today - timedelta(days=1), "visit")
     # Ajustar a 3 días: debería insertar sintéticos para días 2 y 3 hacia atrás
     store.set_streak(chat, "visit", 3, today)
-    store.add_checkin(chat, today, "visit")
     assert store.daily_streak(chat, "visit", today) == 3
 
 
@@ -133,8 +132,18 @@ def test_set_streak_replaces_previous_adjustment(store):
     store.ensure_user(chat)
     today = date(2026, 9, 26)
     store.set_streak(chat, "like", 10, today)
-    store.add_checkin(chat, today, "like")
     assert store.daily_streak(chat, "like", today) == 10
     # Ajustar de nuevo a 3: los sintéticos viejos se borran y se crean nuevos
     store.set_streak(chat, "like", 3, today)
     assert store.daily_streak(chat, "like", today) == 3
+
+
+def test_set_streak_survives_next_day(store):
+    chat = 14
+    store.ensure_user(chat)
+    today = date(2026, 9, 26)
+    store.set_streak(chat, "visit", 5, today)
+    # Al día siguiente, sin marcar nada todavía, la racha sigue viva (no se reinicia a 0)
+    assert store.daily_streak(chat, "visit", today + timedelta(days=1)) == 5
+    store.add_checkin(chat, today + timedelta(days=1), "visit")
+    assert store.daily_streak(chat, "visit", today + timedelta(days=1)) == 6
