@@ -19,6 +19,14 @@ Por eso el progreso de rachas se lleva con los botones de "hecho" del mensaje di
 guarda tus check-ins y calcula la racha, y la badge real se confirma contra la API cuando AWS la
 otorga.
 
+## Mini App
+
+Casi todo se puede hacer sin comandos: el botón "🚀 Abrir mi panel" (y el botón de menú del chat)
+abre una Mini App de Telegram con las 21 insignias, la rutina del día, las rachas y los ajustes.
+La identidad la da Telegram: el frontend (`webapp/index.html`) manda su `initData`
+firmado y `bot/miniapp.py` lo valida con HMAC contra el token del bot antes de tocar nada. No hay
+login de AWS ni de Builder Center.
+
 ## Comandos
 
 - `/perfil davidrm` – conecta tu perfil (también acepta la URL completa)
@@ -95,6 +103,20 @@ URL=$(aws cloudformation describe-stacks --stack-name builder-badge-bot \
 curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
   -d "url=$URL" -d "secret_token=$WEBHOOK_SECRET" -d "drop_pending_updates=true"
 ```
+
+```bash
+# 5. Mini App: se sirve desde la misma Function URL (GET = panel, POST /api/* = API)
+sam deploy --stack-name builder-badge-bot --resolve-s3 --capabilities CAPABILITY_IAM \
+  --parameter-overrides WebhookSecret=$WEBHOOK_SECRET MiniAppUrl=$URL
+
+curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setChatMenuButton" \
+  -H 'content-type: application/json' \
+  -d "{\"menu_button\":{\"type\":\"web_app\",\"text\":\"Mi panel\",\"web_app\":{\"url\":\"$URL\"}}}"
+```
+
+`MiniAppUrl` va como parámetro y no como `!GetAtt` porque la función que sirve la Mini App es la
+misma que la referencia (dependencia circular): queda vacío en el primer despliegue y se rellena
+en el segundo. Si está vacío, el bot no muestra el botón del panel.
 
 Para borrar todo: `sam delete --stack-name builder-badge-bot`.
 
