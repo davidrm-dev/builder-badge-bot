@@ -49,7 +49,7 @@ def fake_update(lang_code: str | None = None) -> tuple[SimpleNamespace, AsyncMoc
 
 
 def fake_context(*args: str) -> SimpleNamespace:
-    return SimpleNamespace(args=list(args), application=SimpleNamespace())
+    return SimpleNamespace(args=list(args), application=SimpleNamespace(), user_data={})
 
 
 @pytest.mark.asyncio
@@ -128,3 +128,55 @@ async def test_daily_keyboard_links_to_builder_center(env):
     markup = reply.await_args.kwargs["reply_markup"]
     urls = [b.url for row in markup.inline_keyboard for b in row if b.url]
     assert "https://builder.aws.com/" in urls
+
+
+@pytest.mark.asyncio
+async def test_streak_set_via_text_flow(env):
+    """El usuario toca 'Fijar días', el bot pide número, el usuario manda '12'."""
+    update, reply = fake_update()
+    await botmain.cmd_profile(update, fake_context("davidrm"))
+
+    # Simular que el contexto tiene el estado pendiente (como si hubiera tocado adv:set:visit)
+    ctx = fake_context()
+    ctx.user_data["pending_streak_set"] = {"metric": "visit", "chat_id": 42}
+    update.message.text = "12"
+    await botmain.on_text(update, ctx)
+
+    sent = reply.await_args.args[0] if reply.await_args.args else reply.await_args.kwargs.get("text", "")
+    assert "12" in sent
+    # El estado debe haberse limpiado
+    assert "pending_streak_set" not in ctx.user_data
+
+
+@pytest.mark.asyncio
+async def test_streak_set_invalid_input(env):
+    """Si el usuario manda texto no numérico en el flujo de ajuste, el bot lo rechaza."""
+    update, reply = fake_update()
+    await botmain.cmd_profile(update, fake_context("davidrm"))
+
+    ctx = fake_context()
+    ctx.user_data["pending_streak_set"] = {"metric": "visit", "chat_id": 42}
+    update.message.text = "muchos"
+    await botmain.on_text(update, ctx)
+
+    sent = reply.await_args.args[0] if reply.await_args.args else reply.await_args.kwargs.get("text", "")
+    # El bot debe pedir de nuevo (mensaje de error), estado sigue activo
+    assert "pending_streak_set" in ctx.user_data
+    assert "12" in sent or "número" in sent.lower() or "number" in sent.lower()
+
+
+@pytest.mark.asyncio
+async def test_streak_set_too_big(env):
+    """Si el usuario manda un número mayor que el máximo de la racha, el bot avisa."""
+    update, reply = fake_update()
+    await botmain.cmd_profile(update, fake_context("davidrm"))
+
+    ctx = fake_context()
+    ctx.user_data["pending_streak_set"] = {"metric": "visit", "chat_id": 42}
+    update.message.text = "999"
+    await botmain.on_text(update, ctx)
+
+    sent = reply.await_args.args[0] if reply.await_args.args else reply.await_args.kwargs.get("text", "")
+    assert "90" in sent  # máximo de visit es 90 días
+    # Estado sigue activo para que el usuario pueda corregir
+    assert "pending_streak_set" in ctx.user_data

@@ -14,7 +14,9 @@ from .main import build_app
 
 log = logging.getLogger("builder-badge-bot.webhook")
 
-_loop = asyncio.new_event_loop()
+# La app se inicializa una vez y se reutiliza entre invocaciones warm (Lambda container reuse).
+# El loop se crea por invocación con asyncio.run() para evitar que un loop en estado inválido
+# contamine todas las invocaciones subsiguientes.
 _app = None
 
 
@@ -22,8 +24,12 @@ def _get_app():
     global _app
     if _app is None:
         _app = build_app(telegram_token(), with_jobs=False)
-        _loop.run_until_complete(_app.initialize())
+        asyncio.run(_initialize(_app))
     return _app
+
+
+async def _initialize(app) -> None:
+    await app.initialize()
 
 
 def _body(event: dict) -> dict:
@@ -41,5 +47,9 @@ def handler(event: dict, context: object) -> dict:
 
     app = _get_app()
     update = Update.de_json(_body(event), app.bot)
-    _loop.run_until_complete(app.process_update(update))
+    asyncio.run(_process(app, update))
     return {"statusCode": 200, "body": "ok"}
+
+
+async def _process(app, update: Update) -> None:
+    await app.process_update(update)

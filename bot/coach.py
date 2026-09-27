@@ -9,6 +9,15 @@ from . import badges as cat
 from .db import Store
 from .i18n import CHEERS, MOTIVATION, normalize, t
 
+# Iconos para las métricas de racha — mapea metric → (icono, tarea asociada en la rutina)
+_METRIC_ICON = {
+    "visit": "🔑",
+    "like": "❤️",
+    "comment": "💬",
+    "article_week": "📝",
+    "wish_vote_week": "💡",
+}
+
 
 def motivation(lang: str) -> str:
     return random.choice(MOTIVATION[normalize(lang)])
@@ -73,6 +82,7 @@ def badge_overview(store: Store, chat_id: int, lang: str = "es") -> str:
 
 
 def streak_lines(store: Store, chat_id: int, today: date, earned: set[str], lang: str = "es") -> list[str]:
+    """Líneas de racha con icono, progreso numérico y pista de qué botón tocar."""
     lang = normalize(lang)
     lines = []
     for metric in ("visit", "like", "comment"):
@@ -81,10 +91,12 @@ def streak_lines(store: Store, chat_id: int, today: date, earned: set[str], lang
             continue
         streak = store.daily_streak(chat_id, metric, today)
         goal = min(b.target for b in targets if b.target)
+        icon = _METRIC_ICON[metric]
         lines.append(
             t(
                 lang,
                 "streak_days",
+                icon=icon,
                 label=t(lang, f"metric_{metric}"),
                 streak=streak,
                 goal=goal,
@@ -97,10 +109,12 @@ def streak_lines(store: Store, chat_id: int, today: date, earned: set[str], lang
             continue
         weeks = store.weekly_streak(chat_id, metric, today)
         goal = min(b.target for b in targets if b.target)
+        icon = _METRIC_ICON[metric]
         lines.append(
             t(
                 lang,
                 "streak_weeks",
+                icon=icon,
                 label=t(lang, f"metric_{metric}"),
                 streak=weeks,
                 goal=goal,
@@ -108,6 +122,43 @@ def streak_lines(store: Store, chat_id: int, today: date, earned: set[str], lang
             )
         )
     return lines
+
+
+def streak_feedback(store: Store, chat_id: int, task: str, today: date, lang: str) -> str:
+    """Texto de respuesta inmediata al marcar un check-in: muestra la racha actualizada
+    y cuánto falta para la próxima badge de esa métrica."""
+    lang = normalize(lang)
+    # Determinar la métrica que corresponde a esta tarea
+    metric = task  # visit, like, comment son iguales; article_week y wish_vote_week también
+    pending = [b for b in cat.CATALOG if b.metric == metric]
+    if not pending:
+        return t(lang, "cb_done")
+
+    earned = earned_keys(store, chat_id)
+    remaining = [b for b in pending if b.key not in earned]
+    if not remaining:
+        # Ya tiene todas las badges de esta métrica
+        return t(lang, "cb_done")
+
+    if metric in ("visit", "like", "comment"):
+        streak = store.daily_streak(chat_id, metric, today)
+        goal = min(b.target for b in remaining if b.target)
+        icon = _METRIC_ICON[metric]
+        return t(lang, "cb_streak_progress",
+                 icon=icon,
+                 streak=streak,
+                 goal=goal,
+                 missing=max(goal - streak, 0))
+    elif metric in ("article_week", "wish_vote_week"):
+        weeks = store.weekly_streak(chat_id, metric, today)
+        goal = min(b.target for b in remaining if b.target)
+        icon = _METRIC_ICON[metric]
+        return t(lang, "cb_streak_weeks_progress",
+                 icon=icon,
+                 weeks=weeks,
+                 goal=goal,
+                 missing=max(goal - weeks, 0))
+    return t(lang, "cb_done")
 
 
 def daily_message(store: Store, chat_id: int, today: date, lang: str = "es") -> str:
@@ -118,6 +169,7 @@ def daily_message(store: Store, chat_id: int, today: date, lang: str = "es") -> 
 
     lines: list[str] = [t(lang, "daily_title"), progress_line(lang, total_earned), ""]
 
+    # Rutina diaria — cada tarea incluye descripción de la acción concreta
     lines.append(t(lang, "daily_routine"))
     for task, icon, _es, _en, _link in cat.DAILY_ROUTINE:
         mark = "✅" if task in done else "⬜"
@@ -144,6 +196,7 @@ def daily_message(store: Store, chat_id: int, today: date, lang: str = "es") -> 
     st = streak_lines(store, chat_id, today, earned, lang)
     if st:
         lines.append(t(lang, "daily_streaks"))
+        lines.append(t(lang, "daily_streaks_hint"))
         lines.extend(st)
         lines.append("")
 

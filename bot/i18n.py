@@ -78,7 +78,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "daily_routine": "*Rutina diaria · 10 min*",
         "daily_focus": "*🎯 Foco de hoy*",
         "daily_weekly": "*📅 Pendientes de la semana*",
-        "daily_streaks": "*🔥 Rachas*",
+        "daily_streaks": "*🔥 Rachas activas*",
+        "daily_streaks_hint": "_Toca el botón de la rutina cada día para acumular racha:_",
         "daily_footer": "Marca lo que vayas haciendo 👇",
         "progress": "Progreso: *{total}/{max}*  `{bar}`",
         "tier_next": "Te faltan *{missing}* para: {reward}",
@@ -120,8 +121,21 @@ STRINGS: dict[str, dict[str, str]] = {
         "metric_comment": "💬 Comentarios",
         "metric_article_week": "📝 Artículos",
         "metric_wish_vote_week": "💡 Votos a wishes",
-        "streak_days": "{label}: *{streak}/{goal}* días · faltan {missing}",
-        "streak_weeks": "{label}: *{streak}/{goal}* semanas · faltan {missing}",
+        "streak_days": "{icon} {label}: *{streak}/{goal}* días · faltan {missing}",
+        "streak_weeks": "{icon} {label}: *{streak}/{goal}* semanas · faltan {missing}",
+        "cb_streak_progress": "{icon} ¡Marcado! Racha: {streak}/{goal} días · faltan {missing} 🔥",
+        "cb_streak_weeks_progress": "{icon} ¡Marcado! Racha: {streak}/{goal} semanas · faltan {missing} 🔥",
+        "adv_title": "⚙️ *Opciones avanzadas de racha*\n\n_AWS no expone el avance interno, así que tú llevas la cuenta aquí. Ajusta si empezaste antes de instalar el bot o si rompiste la racha._\n\n¿Qué racha quieres ajustar?",
+        "adv_metric_title": "⚙️ *Racha: {label}*\n\nRacha actual en el bot: *{streak}* días\n\n_El bot solo deja de mostrar esta racha cuando AWS confirma la badge. Si ajustas el número, no cambia lo que AWS dice._",
+        "adv_set_prompt": "📝 Escríbeme el número de días que llevas en la racha de *{label}* (ej. `12`):",
+        "adv_set_ok": "✅ Racha de {label} ajustada a *{days}* días.",
+        "adv_set_invalid": "Eso no parece un número válido. Mándame solo el número de días (ej. `12`).",
+        "adv_set_too_big": "El máximo para esta racha es {max} días (la badge más larga). ¿Quisiste decir {max}?",
+        "adv_reset_ok": "🔄 Racha de {label} reiniciada. El conteo arranca desde 0.",
+        "btn_adv": "⚙️ Ajustar racha",
+        "btn_adv_set": "🔢 Fijar días",
+        "btn_adv_reset": "❌ Perdí la racha",
+        "btn_adv_back": "← Volver",
     },
     "en": {
         "choose_lang": "🌐 Choose your language / Elige tu idioma:",
@@ -193,7 +207,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "daily_routine": "*Daily routine · 10 min*",
         "daily_focus": "*🎯 Today's focus*",
         "daily_weekly": "*📅 This week*",
-        "daily_streaks": "*🔥 Streaks*",
+        "daily_streaks": "*🔥 Active streaks*",
+        "daily_streaks_hint": "_Tap the routine button every day to keep your streak going:_",
         "daily_footer": "Tap what you finish 👇",
         "progress": "Progress: *{total}/{max}*  `{bar}`",
         "tier_next": "*{missing}* to go for: {reward}",
@@ -235,8 +250,21 @@ STRINGS: dict[str, dict[str, str]] = {
         "metric_comment": "💬 Comments",
         "metric_article_week": "📝 Articles",
         "metric_wish_vote_week": "💡 Wish votes",
-        "streak_days": "{label}: *{streak}/{goal}* days · {missing} to go",
-        "streak_weeks": "{label}: *{streak}/{goal}* weeks · {missing} to go",
+        "streak_days": "{icon} {label}: *{streak}/{goal}* days · {missing} to go",
+        "streak_weeks": "{icon} {label}: *{streak}/{goal}* weeks · {missing} to go",
+        "cb_streak_progress": "{icon} Marked! Streak: {streak}/{goal} days · {missing} to go 🔥",
+        "cb_streak_weeks_progress": "{icon} Marked! Streak: {streak}/{goal} weeks · {missing} to go 🔥",
+        "adv_title": "⚙️ *Advanced streak options*\n\n_AWS doesn't expose internal streak progress, so you keep count here. Adjust if you started before installing the bot or if you broke a streak._\n\nWhich streak do you want to adjust?",
+        "adv_metric_title": "⚙️ *Streak: {label}*\n\nCurrent streak in bot: *{streak}* days\n\n_The bot only stops showing this streak when AWS confirms the badge. Adjusting the number doesn't change what AWS says._",
+        "adv_set_prompt": "📝 Send me the number of days you have in your *{label}* streak (e.g. `12`):",
+        "adv_set_ok": "✅ {label} streak set to *{days}* days.",
+        "adv_set_invalid": "That doesn't look like a valid number. Send me just the number of days (e.g. `12`).",
+        "adv_set_too_big": "The max for this streak is {max} days (the longest badge). Did you mean {max}?",
+        "adv_reset_ok": "🔄 {label} streak reset. Count starts from 0.",
+        "btn_adv": "⚙️ Adjust streak",
+        "btn_adv_set": "🔢 Set days",
+        "btn_adv_reset": "❌ Lost my streak",
+        "btn_adv_back": "← Back",
     },
 }
 
@@ -277,3 +305,15 @@ def t(lang: str | None, key: str, **kwargs: object) -> str:
     lang = normalize(lang)
     text = STRINGS[lang].get(key) or STRINGS[DEFAULT_LANG][key]
     return text.format(**kwargs) if kwargs else text
+
+
+# Verificación de paridad en tiempo de importación: cualquier clave presente en ES
+# pero ausente en EN se detecta de inmediato al arrancar el bot, no en producción.
+_es_keys = set(STRINGS["es"])
+_en_keys = set(STRINGS["en"])
+_missing_en = _es_keys - _en_keys
+_missing_es = _en_keys - _es_keys
+if _missing_en or _missing_es:
+    raise RuntimeError(
+        f"Claves i18n desincronizadas — falta en 'en': {_missing_en}, falta en 'es': {_missing_es}"
+    )
