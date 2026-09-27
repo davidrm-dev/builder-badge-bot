@@ -94,6 +94,7 @@ STRINGS: dict[str, dict[str, str]] = {
             "alguien más necesita leer cómo lo hiciste.\n\n"
             "Si ya no quieres recordatorios: /pausar"
         ),
+        "btn_app": "🚀 Abrir mi panel",
         "btn_open": "🌐 Abrir Builder Center",
         "btn_read": "📖 Leer",
         "btn_write": "✍️ Escribir",
@@ -223,6 +224,7 @@ STRINGS: dict[str, dict[str, str]] = {
             "somebody out there needs to read how you did it.\n\n"
             "Done with reminders? /pause"
         ),
+        "btn_app": "🚀 Open my dashboard",
         "btn_open": "🌐 Open Builder Center",
         "btn_read": "📖 Read",
         "btn_write": "✍️ Write",

@@ -8,7 +8,7 @@ import re
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import (
@@ -35,6 +35,8 @@ log = logging.getLogger("builder-badge-bot")
 
 DB_PATH = os.environ.get("BOT_DB_PATH", "data/bot.sqlite3")
 DEFAULT_TZ = os.environ.get("BOT_DEFAULT_TZ", "America/Bogota")
+# URL de la Mini App (la misma Function URL). Vacía en local: entonces no se ofrece el panel.
+MINIAPP_URL = os.environ.get("MINIAPP_URL", "")
 
 
 def build_store():
@@ -74,6 +76,13 @@ def link_button(lang: str, key: str, link: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(t(lang, key), url=cat.LINKS[link])
 
 
+def app_row(lang: str) -> list[list[InlineKeyboardButton]]:
+    """Fila con el botón que abre la Mini App, si está desplegada."""
+    if not MINIAPP_URL:
+        return []
+    return [[InlineKeyboardButton(t(lang, "btn_app"), web_app=WebAppInfo(MINIAPP_URL))]]
+
+
 def lang_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton(LANG_NAMES[code], callback_data=f"lang:{code}") for code in LANGS]]
@@ -82,7 +91,7 @@ def lang_keyboard() -> InlineKeyboardMarkup:
 
 def routine_keyboard(chat_id: int, day: date, lang: str) -> InlineKeyboardMarkup:
     done = store.tasks_done(chat_id, day)
-    rows: list[list[InlineKeyboardButton]] = []
+    rows: list[list[InlineKeyboardButton]] = app_row(lang)
     row: list[InlineKeyboardButton] = []
     for task, icon, _es, _en, _link in cat.DAILY_ROUTINE + cat.WEEKLY_ROUTINE:
         mark = "✅" if task in done else "⬜"
@@ -139,7 +148,8 @@ def adv_action_keyboard(lang: str, metric: str) -> InlineKeyboardMarkup:
 def board_keyboard(lang: str, alias: str | None) -> InlineKeyboardMarkup:
     profile = cat.profile_url(alias) if alias else cat.LINKS["profile"]
     return InlineKeyboardMarkup(
-        [
+        app_row(lang)
+        + [
             [
                 InlineKeyboardButton(t(lang, "btn_profile"), url=profile),
                 link_button(lang, "btn_rewards", "rewards"),
@@ -154,7 +164,8 @@ def board_keyboard(lang: str, alias: str | None) -> InlineKeyboardMarkup:
 
 def welcome_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        [
+        app_row(lang)
+        + [
             [
                 InlineKeyboardButton(t(lang, "btn_today"), callback_data="today"),
                 link_button(lang, "btn_open", "home"),

@@ -11,6 +11,13 @@ Parameters:
     Type: String
     NoEcho: true
     Description: Secreto compartido con Telegram (header X-Telegram-Bot-Api-Secret-Token).
+  MiniAppUrl:
+    Type: String
+    Default: ""
+    Description: >-
+      URL pública de la Mini App (la propia Function URL). Se pasa como parámetro porque
+      referenciarla desde la función que la sirve creaba una dependencia circular: se deja
+      vacía en el primer despliegue y se rellena en el segundo con el valor de WebhookUrl.
   DefaultTimezone:
     Type: String
     Default: America/Bogota
@@ -30,6 +37,7 @@ Globals:
         BOT_TABLE: !Ref Table
         BOT_DEFAULT_TZ: !Ref DefaultTimezone
         TOKEN_PARAMETER: !Ref TokenParameter
+        MINIAPP_URL: !Ref MiniAppUrl
 
 Resources:
   Table:
