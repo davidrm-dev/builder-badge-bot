@@ -92,6 +92,10 @@ curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
 
 Para borrar todo: `sam delete --stack-name builder-badge-bot`.
 
+Si despliegas con un usuario dedicado en vez de tu cuenta admin, en
+[`docs/deploy-policy.json`](docs/deploy-policy.json) está la política mínima: solo permite tocar
+recursos `builder-badge-bot*` y el bucket de artefactos de SAM.
+
 ### Alternativa: Lightsail / EC2
 
 Si prefieres no portar nada, corre el `Dockerfile` tal cual en una instancia Lightsail
