@@ -37,6 +37,12 @@ DB_PATH = os.environ.get("BOT_DB_PATH", "data/bot.sqlite3")
 DEFAULT_TZ = os.environ.get("BOT_DEFAULT_TZ", "America/Bogota")
 # URL de la Mini App (la misma Function URL). Vacía en local: entonces no se ofrece el panel.
 MINIAPP_URL = os.environ.get("MINIAPP_URL", "")
+# Cuántas cuentas de Telegram distintas pueden seguir el mismo perfil de Builder Center.
+MAX_LINKED_CHATS = int(os.environ.get("BOT_MAX_LINKED_CHATS", "3"))
+
+
+class ProfileLinkLimit(Exception):
+    """El perfil ya está seguido por el máximo de cuentas de Telegram permitidas."""
 
 
 def build_store():
@@ -174,8 +180,26 @@ def welcome_keyboard(lang: str) -> InlineKeyboardMarkup:
     )
 
 
+def link_profile(chat_id: int, alias: str) -> api.Profile:
+    """Asocia un perfil público de Builder Center a este chat, con tope de cuentas por perfil.
+
+    Cualquiera puede seguir un alias público, pero las rachas y check-ins viven bajo el
+    chat_id firmado por Telegram, así que seguir a alguien nunca toca sus datos.
+    """
+    profile = api.get_profile(alias)
+    linked = store.chat_ids_for_profile(profile.builder_profile_id) - {chat_id}
+    if len(linked) >= MAX_LINKED_CHATS:
+        raise ProfileLinkLimit(profile.alias)
+    store.set_profile(chat_id, profile.alias, profile.builder_profile_id, profile.name)
+    return profile
+
+
 def sync_badges(chat_id: int, notify_new: bool = True) -> tuple[list[str], int, list[int]]:
-    """Trae las badges desde la API y devuelve (nuevas, total, tiers nuevos)."""
+    """Trae las badges desde la API y devuelve (nuevas, total, tiers nuevos).
+
+    La API es la fuente de verdad: lo que ya no está en la respuesta se borra, para que un
+    perfil anterior (o una badge revocada) no infle el conteo.
+    """
     user = store.get_user(chat_id)
     if not user or not user.bp_id:
         return [], 0, []
@@ -193,7 +217,11 @@ def sync_badges(chat_id: int, notify_new: bool = True) -> tuple[list[str], int, 
             badge.display_name,
             badge.awarded_epoch,
         )
+    stale = known - {b.badge_id for b in awarded}
+    if stale:
+        store.delete_badges(chat_id, stale)
     total = store.badge_count(chat_id)
+    store.prune_tiers(chat_id, total)
     tiers = store.pending_tiers(chat_id, total, list(cat.TIER_VALUES))
     if not notify_new:
         return [], total, []
@@ -292,16 +320,21 @@ async def set_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, alias:
     store.ensure_user(chat_id)
     lang = lang_of(chat_id)
     try:
-        profile = api.get_profile(alias)
+        profile = link_profile(chat_id, alias)
     except api.ProfileNotFound:
         await update.message.reply_text(
             t(lang, "profile_not_found", alias=alias), parse_mode=ParseMode.MARKDOWN
         )
         return
+    except ProfileLinkLimit:
+        await update.message.reply_text(
+            t(lang, "profile_limit", alias=alias, max=MAX_LINKED_CHATS),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
     except api.BuilderApiError as exc:
         await update.message.reply_text(t(lang, "api_down", error=exc))
         return
-    store.set_profile(chat_id, profile.alias, profile.builder_profile_id, profile.name)
     first_time = store.badge_count(chat_id) == 0
     try:
         _new, total, _tiers = sync_badges(chat_id, notify_new=not first_time)

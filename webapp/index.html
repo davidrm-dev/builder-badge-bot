@@ -82,6 +82,7 @@ const T = {
     bad_number: "Escribe solo el número de días (ej. 12)",
     no_profile: "Conecta tu perfil para ver tus insignias.", done_all: "¡Completaste las 21! 🏆",
     view_profile: "Ver mi perfil",
+    limit: "Ese perfil ya lo siguen 3 cuentas de Telegram, que es el máximo.",
   },
   en: {
     today: "Today", badges: "Badges", settings: "Settings",
@@ -96,6 +97,7 @@ const T = {
     bad_number: "Type just the number of days (e.g. 12)",
     no_profile: "Connect your profile to see your badges.", done_all: "All 21 done! 🏆",
     view_profile: "View my profile",
+    limit: "That profile is already followed by 3 Telegram accounts, the maximum.",
   },
 };
 
@@ -120,8 +122,17 @@ async function call(path, body = {}) {
 function errText(err) {
   if (err.code === "profile_not_found") return tr("not_found");
   if (err.code === "builder_api") return tr("api_down");
+  if (err.code === "profile_limit") return tr("limit");
   return tr("error");
 }
+
+// Dentro de Telegram, target=_blank no abre nada: hay que pedirle al cliente que abra la URL.
+document.addEventListener("click", (ev) => {
+  const link = ev.target.closest("a[href^='https://']");
+  if (!link || !tg?.openLink) return;
+  ev.preventDefault();
+  tg.openLink(link.href);
+});
 
 async function act(path, body, btn) {
   const msg = $("#msg");

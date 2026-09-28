@@ -93,3 +93,40 @@ def test_ajuste_de_racha_sobrevive_al_dia_siguiente(store):
     assert store.daily_streak(1, "visit", today + timedelta(days=1)) == 5
     store.reset_streak(1, "visit", today)
     assert store.daily_streak(1, "visit", today) == 0
+
+
+def test_mensaje_del_dia_se_cachea_por_usuario_y_fecha(store):
+    store.ensure_user(1)
+    day = date(2026, 3, 10)
+    assert store.get_pep_talk(1, day) is None
+    store.save_pep_talk(1, day, "sigue así")
+    assert store.get_pep_talk(1, day) == "sigue así"
+    assert store.get_pep_talk(1, day + timedelta(days=1)) is None
+    assert store.get_pep_talk(2, day) is None
+
+
+def test_cambiar_de_perfil_limpia_insignias_y_hitos(store):
+    store.set_profile(1, "davidrm", "bp-1", "David")
+    store.save_badge(1, "b1", "hello_world", "Hello, World!", 1.0)
+    store.pending_tiers(1, 7, [7, 14, 21])
+    store.set_profile(1, "otro", "bp-2", "Otro")
+    assert store.badge_count(1) == 0
+    assert store.pending_tiers(1, 7, [7, 14, 21]) == [7]
+
+
+def test_chat_ids_por_perfil_y_borrado_de_insignias(store):
+    store.set_profile(1, "davidrm", "bp-1", "David")
+    store.set_profile(2, "davidrm", "bp-1", "David")
+    store.set_profile(3, "otro", "bp-2", "Otro")
+    assert store.chat_ids_for_profile("bp-1") == {1, 2}
+
+    store.save_badge(1, "b1", None, "Uno", 1.0)
+    store.save_badge(1, "b2", None, "Dos", 2.0)
+    store.delete_badges(1, {"b2"})
+    assert store.known_badge_ids(1) == {"b1"}
+
+
+def test_prune_tiers_olvida_hitos_por_encima_del_total(store):
+    store.pending_tiers(1, 14, [7, 14, 21])
+    store.prune_tiers(1, 7)
+    assert store.pending_tiers(1, 14, [7, 14, 21]) == [14]

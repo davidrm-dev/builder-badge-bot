@@ -7,6 +7,7 @@ Diseño de la tabla (PK/SK):
     U#<chat_id> | BADGE#<badge_id>         → badge ya otorgada por AWS
     U#<chat_id> | CHK#<YYYY-MM-DD>#<task>  → check-in manual (con TTL)
     U#<chat_id> | TIER#<n>                 → hito de recompensa ya anunciado
+    U#<chat_id> | PEP#<YYYY-MM-DD>         → mensaje del día generado con Bedrock (con TTL)
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from boto3.dynamodb.conditions import Attr, Key
 from .db import User
 
 CHECKIN_TTL_DAYS = 400
+PEP_TTL_DAYS = 7
 
 
 def _pk(chat_id: int) -> str:
@@ -98,8 +100,34 @@ class DynamoStore:
             ExpressionAttributeValues={f":{k}": v for k, v in values.items()},
         )
 
+    def chat_ids_for_profile(self, bp_id: str) -> set[int]:
+        return {u.chat_id for u in self.all_users() if u.bp_id == bp_id}
+
     def set_profile(self, chat_id: int, alias: str, bp_id: str, name: str) -> None:
+        previous = self.ensure_user(chat_id)
         self._update_profile(chat_id, {"alias": alias, "bp_id": bp_id, "name": name})
+        if previous.bp_id and previous.bp_id != bp_id:
+            # Las badges y los hitos son del perfil anterior: si no se borran, el panel suma
+            # las de los dos perfiles.
+            self.clear_badges(chat_id)
+
+    # ---------------- mensaje generado del día ----------------
+    def get_pep_talk(self, chat_id: int, day: date) -> str | None:
+        item = self.table.get_item(
+            Key={"pk": _pk(chat_id), "sk": f"PEP#{day.isoformat()}"}
+        ).get("Item")
+        return item.get("text") if item else None
+
+    def save_pep_talk(self, chat_id: int, day: date, text: str) -> None:
+        ttl = int((datetime.now(timezone.utc) + timedelta(days=PEP_TTL_DAYS)).timestamp())
+        self.table.put_item(
+            Item={
+                "pk": _pk(chat_id),
+                "sk": f"PEP#{day.isoformat()}",
+                "text": text,
+                "ttl": ttl,
+            }
+        )
 
     def set_schedule(self, chat_id: int, hour: int, minute: int) -> None:
         self._update_profile(chat_id, {"hour": hour, "minute": minute, "enabled": True})
@@ -156,6 +184,21 @@ class DynamoStore:
                 "awarded_epoch": Decimal(str(epoch)) if epoch is not None else None,
             }
         )
+
+    def delete_badges(self, chat_id: int, badge_ids: set[str]) -> None:
+        for badge_id in badge_ids:
+            self.table.delete_item(Key={"pk": _pk(chat_id), "sk": f"BADGE#{badge_id}"})
+
+    def clear_badges(self, chat_id: int) -> None:
+        for prefix in ("BADGE#", "TIER#"):
+            for item in self._items(chat_id, prefix):
+                self.table.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
+
+    def prune_tiers(self, chat_id: int, count: int) -> None:
+        """Olvida los hitos por encima del total actual para que se vuelvan a anunciar."""
+        for item in self._items(chat_id, "TIER#"):
+            if int(item["sk"].split("#", 1)[1]) > count:
+                self.table.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
 
     def badge_count(self, chat_id: int) -> int:
         return len(self._items(chat_id, "BADGE#"))

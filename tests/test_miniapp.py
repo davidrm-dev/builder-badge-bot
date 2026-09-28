@@ -211,3 +211,52 @@ def test_post_api_pasa_por_la_miniapp(env, monkeypatch):
     )
     assert res["statusCode"] == 200
     assert json.loads(res["body"])["progress"]["total"] == 21
+
+
+# --------------------------------------------------------------------------- seguridad
+def call_as(chat_id: int, path: str, **payload):
+    return miniapp.handle(path, {"initData": init_data(chat_id=chat_id), **payload}, TOKEN)
+
+
+def test_seguir_un_perfil_ajeno_no_toca_las_rachas_del_dueno(env):
+    """Dos Telegram con el mismo alias público: cada uno lleva su propia racha."""
+    call_as(1, "/api/profile", alias="davidrm")
+    call_as(2, "/api/profile", alias="davidrm")
+    call_as(1, "/api/streak", metric="visit", days=10)
+
+    _status, intruso = call_as(2, "/api/state")
+    visit = next(s for s in intruso["streaks"] if s["metric"] == "visit")
+    assert visit["streak"] == 0
+
+    _status, dueno = call_as(1, "/api/state")
+    assert next(s for s in dueno["streaks"] if s["metric"] == "visit")["streak"] == 10
+
+
+def test_el_cuarto_telegram_no_puede_conectar_el_mismo_perfil(env):
+    for chat_id in (1, 2, 3):
+        status, _body = call_as(chat_id, "/api/profile", alias="davidrm")
+        assert status == 200
+    status, body = call_as(4, "/api/profile", alias="davidrm")
+    assert (status, body["error"]) == (403, "profile_limit")
+    assert env.get_user(4).bp_id is None
+
+
+def test_reconectar_el_mismo_perfil_no_consume_un_cupo_extra(env):
+    for chat_id in (1, 2, 3):
+        call_as(chat_id, "/api/profile", alias="davidrm")
+    assert call_as(2, "/api/profile", alias="davidrm")[0] == 200
+
+
+def test_cambiar_de_perfil_borra_las_insignias_del_anterior(env, monkeypatch):
+    call_as(1, "/api/profile", alias="davidrm")
+    assert env.badge_count(1) == 1
+
+    monkeypatch.setattr(
+        api, "get_profile",
+        lambda alias: api.Profile(alias="otro", builder_profile_id="bp-2", name="Otro"),
+    )
+    monkeypatch.setattr(api, "get_awarded_badges", lambda bp_id: [])
+    call_as(1, "/api/profile", alias="otro")
+    _status, body = call_as(1, "/api/state")
+    assert env.badge_count(1) == 0
+    assert body["progress"]["earned"] == 0

@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 from datetime import date, timedelta
 
+from . import ai
 from . import badges as cat
 from .db import Store
 from .i18n import CHEERS, MOTIVATION, normalize, t
@@ -21,6 +22,34 @@ _METRIC_ICON = {
 
 def motivation(lang: str) -> str:
     return random.choice(MOTIVATION[normalize(lang)])
+
+
+def ai_context(store: Store, chat_id: int, today: date, earned: set[str], lang: str) -> ai.Context:
+    """Resumen del usuario que se le manda a Bedrock: progreso, rachas y siguiente insignia."""
+    streaks: list[tuple[str, int, int | None]] = []
+    for metric in ("visit", "like", "comment", "article_week", "wish_vote_week"):
+        targets = [b for b in cat.CATALOG if b.metric == metric and b.key not in earned]
+        if not targets:
+            continue
+        weekly = metric.endswith("_week")
+        count = (store.weekly_streak if weekly else store.daily_streak)(chat_id, metric, today)
+        goals = [b.target for b in targets if b.target]
+        streaks.append((t(lang, f"metric_{metric}"), count, min(goals) if goals else None))
+    user = store.get_user(chat_id)
+    nxt = next_targets(earned, limit=1)
+    return ai.Context(
+        name=user.name if user else None,
+        earned=store.badge_count(chat_id),
+        total=cat.TOTAL,
+        streaks=streaks,
+        next_badge=nxt[0].name if nxt else None,
+    )
+
+
+def pep_talk(store: Store, chat_id: int, today: date, earned: set[str], lang: str) -> str:
+    """Mensaje motivador de Bedrock si está disponible; si no, uno de la lista fija."""
+    text = ai.pep_talk(store, chat_id, lang, today, ai_context(store, chat_id, today, earned, lang))
+    return text or motivation(lang)
 
 
 def progress_bar(done: int, total: int, width: int = 10) -> str:
@@ -200,7 +229,7 @@ def daily_message(store: Store, chat_id: int, today: date, lang: str = "es") -> 
         lines.extend(st)
         lines.append("")
 
-    lines.append(f"_{motivation(lang)}_")
+    lines.append(f"_{pep_talk(store, chat_id, today, earned, lang)}_")
     lines.append(t(lang, "daily_footer"))
     return "\n".join(lines)
 

@@ -150,7 +150,7 @@ def state(chat_id: int) -> dict:
             {"name": b.name, "how": b.how(lang), "url": b.url}
             for b in coach.next_targets(earned)
         ],
-        "motivation": _plain(coach.motivation(lang)),
+        "motivation": _plain(coach.pep_talk(botmain.store, chat_id, today, earned, lang)),
         "links": cat.LINKS,
     }
 
@@ -180,8 +180,7 @@ def _set_settings(chat_id: int, payload: dict) -> None:
 
 
 def _set_profile(chat_id: int, alias: str) -> None:
-    profile = api.get_profile(alias)
-    botmain.store.set_profile(chat_id, profile.alias, profile.builder_profile_id, profile.name)
+    botmain.link_profile(chat_id, alias)
     botmain.sync_badges(chat_id, notify_new=False)
 
 
@@ -246,6 +245,8 @@ def handle(path: str, payload: dict, token: str) -> tuple[int, dict]:
             return 404, {"error": "not found"}
     except api.ProfileNotFound:
         return 404, {"error": "profile_not_found"}
+    except botmain.ProfileLinkLimit:
+        return 403, {"error": "profile_limit"}
     except api.BuilderApiError as exc:
         log.warning("API de Builder Center falló: %s", exc)
         return 502, {"error": "builder_api"}
