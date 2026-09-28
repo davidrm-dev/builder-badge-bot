@@ -11,10 +11,10 @@ LINKS = {
     "write": f"{BASE}/create/content",
     "wishlist": f"{BASE}/wishlist",
     "new_wish": f"{BASE}/create/wish",
+    # /profile es "Manage Profile": bio, foto y redes. /settings solo tiene idioma y tema.
     "profile": f"{BASE}/profile",
-    "settings": f"{BASE}/settings",
     "rewards": f"{BASE}/profile/rewards",
-    "spaces": f"{BASE}/connect/spaces",
+    "my_content": f"{BASE}/profile/content",
 }
 
 
@@ -52,7 +52,7 @@ CATALOG: tuple[Badge, ...] = (
         target=None,
         how_es="Completa la sección About de tu perfil: bio, ubicación y redes. 2 minutos.",
         how_en="Fill in the About section of your profile: bio, location and links. 2 minutes.",
-        link="settings",
+        link="profile",
         api_ids=("activity_badge.profile.about",),
     ),
     Badge(
@@ -63,7 +63,7 @@ CATALOG: tuple[Badge, ...] = (
         target=None,
         how_es="Sube una foto de perfil y guarda los cambios.",
         how_en="Upload a profile picture and save.",
-        link="settings",
+        link="profile",
         api_ids=("activity_badge.profile.photo",),
     ),
     Badge(
@@ -258,7 +258,7 @@ CATALOG: tuple[Badge, ...] = (
         target=None,
         how_es="10 likes en 5 artículos distintos: guías prácticas y compártelas en LinkedIn.",
         how_en="10 likes across 5 different articles: practical guides, then share them on LinkedIn.",
-        link="write",
+        link="my_content",
         api_ids=("activity_badge.article.like.10x5",),
     ),
     Badge(

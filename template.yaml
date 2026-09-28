@@ -11,6 +11,19 @@ Parameters:
     Type: String
     NoEcho: true
     Description: Secreto compartido con Telegram (header X-Telegram-Bot-Api-Secret-Token).
+  MiniAppUrl:
+    Type: String
+    Default: ""
+    Description: >-
+      URL pública de la Mini App (la propia Function URL). Se pasa como parámetro porque
+      referenciarla desde la función que la sirve creaba una dependencia circular: se deja
+      vacía en el primer despliegue y se rellena en el segundo con el valor de WebhookUrl.
+  BedrockModelId:
+    Type: String
+    Default: us.amazon.nova-lite-v1:0
+    Description: >-
+      Modelo de Bedrock para el mensaje motivador diario (uno por usuario y día, cacheado).
+      Déjalo vacío para desactivar Bedrock y usar solo los mensajes estáticos.
   DefaultTimezone:
     Type: String
     Default: America/Bogota
@@ -30,6 +43,8 @@ Globals:
         BOT_TABLE: !Ref Table
         BOT_DEFAULT_TZ: !Ref DefaultTimezone
         TOKEN_PARAMETER: !Ref TokenParameter
+        MINIAPP_URL: !Ref MiniAppUrl
+        BEDROCK_MODEL_ID: !Ref BedrockModelId
 
 Resources:
   Table:
@@ -73,6 +88,11 @@ Resources:
               Condition:
                 StringEquals:
                   kms:ViaService: !Sub "ssm.${AWS::Region}.amazonaws.com"
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
+                - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*"
 
   SchedulerFunction:
     Type: AWS::Serverless::Function
@@ -96,6 +116,11 @@ Resources:
               Condition:
                 StringEquals:
                   kms:ViaService: !Sub "ssm.${AWS::Region}.amazonaws.com"
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
+                - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*"
       Events:
         Tick:
           Type: ScheduleV2

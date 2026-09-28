@@ -147,3 +147,40 @@ def test_set_streak_survives_next_day(store):
     assert store.daily_streak(chat, "visit", today + timedelta(days=1)) == 5
     store.add_checkin(chat, today + timedelta(days=1), "visit")
     assert store.daily_streak(chat, "visit", today + timedelta(days=1)) == 6
+
+
+def test_todos_los_enlaces_del_catalogo_existen():
+    """Cada badge y cada paso de la rutina apunta a una URL real del catálogo."""
+    for badge in cat.CATALOG:
+        assert badge.url.startswith(cat.BASE)
+    for _task, _icon, _es, _en, link in cat.DAILY_ROUTINE + cat.WEEKLY_ROUTINE:
+        assert link in cat.LINKS
+
+
+def test_las_badges_de_perfil_llevan_a_la_pagina_de_perfil():
+    """Bio y foto se editan en /profile, no en /settings (que solo tiene idioma y tema)."""
+    for key in ("hello_world", "photo_finisher"):
+        assert cat.BY_KEY[key].url == cat.LINKS["profile"]
+
+
+def test_sincronizar_borra_las_insignias_que_ya_no_estan(monkeypatch, store, tmp_path):
+    from bot import builder_api as api, main as botmain
+
+    botmain.store = store
+    store.set_profile(1, "davidrm", "bp-1", "David")
+    store.save_badge(1, "vieja", None, "De otro perfil", 1.0)
+    monkeypatch.setattr(
+        api, "get_awarded_badges",
+        lambda bp_id: [
+            api.AwardedBadge(
+                badge_id="activity_badge.profile.about",
+                display_name="Hello, World!",
+                description="",
+                category="Getting Started",
+                awarded_epoch=2.0,
+            )
+        ],
+    )
+    _new, total, _tiers = botmain.sync_badges(1, notify_new=False)
+    assert total == 1
+    assert store.known_badge_ids(1) == {"activity_badge.profile.about"}

@@ -40,6 +40,12 @@ CREATE TABLE IF NOT EXISTS tiers (
     tier    INTEGER NOT NULL,
     PRIMARY KEY (chat_id, tier)
 );
+CREATE TABLE IF NOT EXISTS pep_talks (
+    chat_id INTEGER NOT NULL,
+    day     TEXT NOT NULL,
+    text    TEXT NOT NULL,
+    PRIMARY KEY (chat_id, day)
+);
 """
 
 
@@ -104,11 +110,38 @@ class Store:
             lang=row["lang"],
         )
 
+    def chat_ids_for_profile(self, bp_id: str) -> set[int]:
+        rows = self._conn.execute("SELECT chat_id FROM users WHERE bp_id = ?", (bp_id,))
+        return {int(r["chat_id"]) for r in rows}
+
     def set_profile(self, chat_id: int, alias: str, bp_id: str, name: str) -> None:
-        self.ensure_user(chat_id)
+        previous = self.ensure_user(chat_id)
         self._conn.execute(
             "UPDATE users SET alias = ?, bp_id = ?, name = ? WHERE chat_id = ?",
             (alias, bp_id, name, chat_id),
+        )
+        self._conn.commit()
+        if previous.bp_id and previous.bp_id != bp_id:
+            # Las badges y los hitos son del perfil anterior: si no se borran, el panel suma
+            # las de los dos perfiles.
+            self.clear_badges(chat_id)
+
+    # ---------------- mensaje generado del día ----------------
+    def get_pep_talk(self, chat_id: int, day: date) -> str | None:
+        row = self._conn.execute(
+            "SELECT text FROM pep_talks WHERE chat_id = ? AND day = ?",
+            (chat_id, day.isoformat()),
+        ).fetchone()
+        return row["text"] if row else None
+
+    def save_pep_talk(self, chat_id: int, day: date, text: str) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO pep_talks (chat_id, day, text) VALUES (?, ?, ?)",
+            (chat_id, day.isoformat(), text),
+        )
+        self._conn.execute(
+            "DELETE FROM pep_talks WHERE chat_id = ? AND day < ?",
+            (chat_id, (day - timedelta(days=7)).isoformat()),
         )
         self._conn.commit()
 
@@ -158,6 +191,23 @@ class Store:
             " VALUES (?, ?, ?, ?, ?)",
             (chat_id, badge_id, badge_key, display_name, epoch),
         )
+        self._conn.commit()
+
+    def delete_badges(self, chat_id: int, badge_ids: set[str]) -> None:
+        for badge_id in badge_ids:
+            self._conn.execute(
+                "DELETE FROM badges WHERE chat_id = ? AND badge_id = ?", (chat_id, badge_id)
+            )
+        self._conn.commit()
+
+    def clear_badges(self, chat_id: int) -> None:
+        self._conn.execute("DELETE FROM badges WHERE chat_id = ?", (chat_id,))
+        self._conn.execute("DELETE FROM tiers WHERE chat_id = ?", (chat_id,))
+        self._conn.commit()
+
+    def prune_tiers(self, chat_id: int, count: int) -> None:
+        """Olvida los hitos por encima del total actual para que se vuelvan a anunciar."""
+        self._conn.execute("DELETE FROM tiers WHERE chat_id = ? AND tier > ?", (chat_id, count))
         self._conn.commit()
 
     def badge_count(self, chat_id: int) -> int:

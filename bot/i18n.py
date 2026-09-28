@@ -45,6 +45,10 @@ STRINGS: dict[str, dict[str, str]] = {
             "Revisa el alias en la URL de tu perfil: builder.aws.com/community/@*tualias*"
         ),
         "api_down": "Builder Center no respondió ({error}). Intentemos de nuevo en un rato.",
+        "profile_limit": (
+            "🔒 El perfil `{alias}` ya lo siguen {max} cuentas de Telegram, que es el máximo.\n"
+            "Si es tu perfil, usa /borrar en la cuenta que ya no uses y vuelve a conectarlo aquí."
+        ),
         "profile_ok": (
             "✅ *Conectado:* {name} (@{alias})\n"
             "🏅 Badges detectadas: *{total}/{max}*  `{bar}`\n"
@@ -94,13 +98,13 @@ STRINGS: dict[str, dict[str, str]] = {
             "alguien más necesita leer cómo lo hiciste.\n\n"
             "Si ya no quieres recordatorios: /pausar"
         ),
+        "btn_app": "🚀 Abrir mi panel",
         "btn_open": "🌐 Abrir Builder Center",
         "btn_read": "📖 Leer",
         "btn_write": "✍️ Escribir",
         "btn_wishlist": "💡 Wishlist",
         "btn_profile": "👤 Mi perfil",
         "btn_rewards": "🎁 Recompensas",
-        "btn_settings": "⚙️ Editar perfil",
         "btn_sync": "🔄 Revisar badges",
         "btn_today": "☀️ Misión de hoy",
         "btn_go": "👉 Ir a {what}",
@@ -174,6 +178,10 @@ STRINGS: dict[str, dict[str, str]] = {
             "Check the alias in your profile URL: builder.aws.com/community/@*youralias*"
         ),
         "api_down": "Builder Center didn't answer ({error}). Let's try again in a bit.",
+        "profile_limit": (
+            "🔒 The profile `{alias}` is already followed by {max} Telegram accounts, the maximum.\n"
+            "If it is your profile, run /delete on the account you no longer use and connect it here again."
+        ),
         "profile_ok": (
             "✅ *Connected:* {name} (@{alias})\n"
             "🏅 Badges found: *{total}/{max}*  `{bar}`\n"
@@ -223,13 +231,13 @@ STRINGS: dict[str, dict[str, str]] = {
             "somebody out there needs to read how you did it.\n\n"
             "Done with reminders? /pause"
         ),
+        "btn_app": "🚀 Open my dashboard",
         "btn_open": "🌐 Open Builder Center",
         "btn_read": "📖 Read",
         "btn_write": "✍️ Write",
         "btn_wishlist": "💡 Wishlist",
         "btn_profile": "👤 My profile",
         "btn_rewards": "🎁 Rewards",
-        "btn_settings": "⚙️ Edit profile",
         "btn_sync": "🔄 Check badges",
         "btn_today": "☀️ Today's mission",
         "btn_go": "👉 Go to {what}",
