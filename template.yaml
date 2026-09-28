@@ -91,7 +91,7 @@ Resources:
             - Effect: Allow
               Action: bedrock:InvokeModel
               Resource:
-                - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/*"
+                - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
                 - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*"
 
   SchedulerFunction:
@@ -119,7 +119,7 @@ Resources:
             - Effect: Allow
               Action: bedrock:InvokeModel
               Resource:
-                - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/*"
+                - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
                 - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*"
       Events:
         Tick:
