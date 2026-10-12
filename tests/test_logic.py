@@ -68,16 +68,42 @@ def test_next_targets_prioritises_phase_and_one_badge_per_metric(store):
     assert targets[0].target == 7
 
 
-def test_daily_message_marks_done_tasks(store):
+def test_daily_message_is_short(store):
     chat = 5
     store.ensure_user(chat)
     store.save_badge(chat, "activity_badge.profile.about", "hello_world", "Hello, World!", None)
-    today = date(2026, 9, 26)
-    store.add_checkin(chat, today, "visit")
+    today = date(2026, 9, 26)  # sábado: sin recordatorio semanal
+    for delta in range(3):
+        store.add_checkin(chat, today - timedelta(days=delta), "visit")
     msg = coach.daily_message(store, chat, today)
     assert "1/21" in msg
-    assert "✅ 🔑" in msg
-    assert "⬜ ❤️" in msg
+    assert "Photo Finisher" in msg  # una sola badge de foco
+    assert "Knowledge Seeker" not in msg
+    assert "*3/7*" in msg  # solo la racha en curso
+    assert "Likes" not in msg
+    assert "🔑 🔑" not in msg
+    assert len(msg.splitlines()) <= 5
+
+
+def test_daily_message_weekly_only_on_monday_and_thursday(store):
+    chat = 7
+    store.ensure_user(chat)
+    monday = date(2026, 9, 28)
+    assert "📝" in coach.daily_message(store, chat, monday)
+    assert "📝" not in coach.daily_message(store, chat, monday + timedelta(days=1))
+    store.add_checkin(chat, monday, "article_week")
+    thursday = monday + timedelta(days=3)
+    assert "📝" not in coach.daily_message(store, chat, thursday)
+    assert "💡" in coach.daily_message(store, chat, thursday)
+
+
+def test_daily_message_celebrates_full_routine(store):
+    chat = 8
+    store.ensure_user(chat)
+    today = date(2026, 9, 26)
+    for task, *_ in cat.DAILY_ROUTINE:
+        store.add_checkin(chat, today, task)
+    assert "Rutina de hoy completa" in coach.daily_message(store, chat, today)
 
 
 def test_badge_overview_lists_every_badge(store):

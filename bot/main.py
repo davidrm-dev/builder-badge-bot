@@ -5,8 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import date, datetime, time
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from datetime import date, time
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
@@ -22,9 +21,10 @@ from telegram.ext import (
 
 from . import badges as cat
 from . import builder_api as api
-from . import coach
+from . import coach, core
 from .commands import register_commands
-from .db import Store, User
+from .core import hhmm, today_for, user_tz, valid_tz
+from .db import User
 from .i18n import LANG_NAMES, LANGS, normalize, t
 
 logging.basicConfig(
@@ -33,41 +33,13 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("builder-badge-bot")
 
-DB_PATH = os.environ.get("BOT_DB_PATH", "data/bot.sqlite3")
-DEFAULT_TZ = os.environ.get("BOT_DEFAULT_TZ", "America/Bogota")
-
-
-def build_store():
-    """DynamoDB si corre en Lambda (BOT_TABLE), SQLite en local/VM."""
-    if os.environ.get("BOT_TABLE"):
-        from .dynamo import DynamoStore
-
-        return DynamoStore()
-    return Store(DB_PATH)
-
-
-store = build_store()
+store = core.get_store()
 
 
 # --------------------------------------------------------------------------- utilidades
-def user_tz(user: User) -> ZoneInfo:
-    try:
-        return ZoneInfo(user.tz)
-    except ZoneInfoNotFoundError:
-        return ZoneInfo(DEFAULT_TZ)
-
-
-def today_for(user: User) -> date:
-    return datetime.now(user_tz(user)).date()
-
-
 def lang_of(chat_id: int) -> str:
     user = store.get_user(chat_id)
     return normalize(user.lang if user else None)
-
-
-def hhmm(user: User) -> str:
-    return f"{user.hour:02d}:{user.minute:02d}"
 
 
 def link_button(lang: str, key: str, link: str) -> InlineKeyboardButton:
@@ -165,28 +137,7 @@ def welcome_keyboard(lang: str) -> InlineKeyboardMarkup:
 
 def sync_badges(chat_id: int, notify_new: bool = True) -> tuple[list[str], int, list[int]]:
     """Trae las badges desde la API y devuelve (nuevas, total, tiers nuevos)."""
-    user = store.get_user(chat_id)
-    if not user or not user.bp_id:
-        return [], 0, []
-    awarded = api.get_awarded_badges(user.bp_id)
-    known = store.known_badge_ids(chat_id)
-    new_names = []
-    for badge in awarded:
-        match = cat.match(badge.badge_id, badge.display_name)
-        if badge.badge_id not in known:
-            new_names.append(badge.display_name or badge.badge_id)
-        store.save_badge(
-            chat_id,
-            badge.badge_id,
-            match.key if match else None,
-            badge.display_name,
-            badge.awarded_epoch,
-        )
-    total = store.badge_count(chat_id)
-    tiers = store.pending_tiers(chat_id, total, list(cat.TIER_VALUES))
-    if not notify_new:
-        return [], total, []
-    return new_names, total, tiers
+    return core.sync_badges(store, chat_id, notify_new)
 
 
 # --------------------------------------------------------------------------- scheduling
@@ -484,9 +435,7 @@ async def cmd_tz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
         await update.message.reply_text(t(lang, "tz_usage"), parse_mode=ParseMode.MARKDOWN)
         return
-    try:
-        ZoneInfo(context.args[0])
-    except (ZoneInfoNotFoundError, ValueError):
+    if not valid_tz(context.args[0]):
         await update.message.reply_text(t(lang, "tz_invalid"), parse_mode=ParseMode.MARKDOWN)
         return
     store.set_timezone(chat_id, context.args[0])

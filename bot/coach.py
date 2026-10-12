@@ -82,7 +82,7 @@ def badge_overview(store: Store, chat_id: int, lang: str = "es") -> str:
 
 
 def streak_lines(store: Store, chat_id: int, today: date, earned: set[str], lang: str = "es") -> list[str]:
-    """Líneas de racha con icono, progreso numérico y pista de qué botón tocar."""
+    """Líneas de racha con progreso numérico (la etiqueta ya trae el icono)."""
     lang = normalize(lang)
     lines = []
     for metric in ("visit", "like", "comment"):
@@ -91,12 +91,10 @@ def streak_lines(store: Store, chat_id: int, today: date, earned: set[str], lang
             continue
         streak = store.daily_streak(chat_id, metric, today)
         goal = min(b.target for b in targets if b.target)
-        icon = _METRIC_ICON[metric]
         lines.append(
             t(
                 lang,
                 "streak_days",
-                icon=icon,
                 label=t(lang, f"metric_{metric}"),
                 streak=streak,
                 goal=goal,
@@ -109,12 +107,10 @@ def streak_lines(store: Store, chat_id: int, today: date, earned: set[str], lang
             continue
         weeks = store.weekly_streak(chat_id, metric, today)
         goal = min(b.target for b in targets if b.target)
-        icon = _METRIC_ICON[metric]
         lines.append(
             t(
                 lang,
                 "streak_weeks",
-                icon=icon,
                 label=t(lang, f"metric_{metric}"),
                 streak=weeks,
                 goal=goal,
@@ -161,47 +157,70 @@ def streak_feedback(store: Store, chat_id: int, task: str, today: date, lang: st
     return t(lang, "cb_done")
 
 
+def focus_tip(badge: cat.Badge, lang: str) -> str:
+    """Primera frase del consejo de la badge: suficiente para el mensaje corto."""
+    return badge.how(lang).split(". ")[0].rstrip(".")
+
+
+def best_streak_line(store: Store, chat_id: int, today: date, earned: set[str], lang: str) -> str | None:
+    """La racha diaria activa más cercana a su badge, o None si no hay ninguna en curso."""
+    best: tuple[int, int, str] | None = None  # (faltan, -racha, métrica)
+    for metric in ("visit", "like", "comment"):
+        targets = [b for b in cat.CATALOG if b.metric == metric and b.key not in earned]
+        if not targets:
+            continue
+        streak = store.daily_streak(chat_id, metric, today)
+        if streak == 0:
+            continue
+        goal = min(b.target for b in targets if b.target)
+        candidate = (goal - streak, -streak, metric)
+        if best is None or candidate < best:
+            best = candidate
+    if best is None:
+        return None
+    missing, neg_streak, metric = best
+    return t(
+        lang,
+        "daily_streak",
+        label=t(lang, f"metric_{metric}"),
+        streak=-neg_streak,
+        goal=missing - neg_streak,
+    )
+
+
+# Lo semanal solo se recuerda el lunes y, si sigue pendiente, el jueves.
+WEEKLY_REMINDER_DAYS = (0, 3)
+
+
 def daily_message(store: Store, chat_id: int, today: date, lang: str = "es") -> str:
+    """Misión del día en ~5 líneas; el detalle vive en /badges y /racha."""
     lang = normalize(lang)
     earned = earned_keys(store, chat_id)
     done = store.tasks_done(chat_id, today)
     total_earned = store.badge_count(chat_id)
 
-    lines: list[str] = [t(lang, "daily_title"), progress_line(lang, total_earned), ""]
-
-    # Rutina diaria — cada tarea incluye descripción de la acción concreta
-    lines.append(t(lang, "daily_routine"))
-    for task, icon, _es, _en, _link in cat.DAILY_ROUTINE:
-        mark = "✅" if task in done else "⬜"
-        lines.append(f"{mark} {icon} {cat.routine_text(task, lang)}")
-    lines.append("")
-
-    targets = next_targets(earned)
-    if targets:
-        lines.append(t(lang, "daily_focus"))
-        for badge in targets:
-            lines.append(f"• *{badge.name}* — {badge.how(lang)}")
-        lines.append("")
-
-    weekly = [
-        f"{icon} {cat.routine_text(task, lang)}"
-        for task, icon, _es, _en, _link in cat.WEEKLY_ROUTINE
-        if _weekly_pending(store, chat_id, task, today, earned)
+    lines = [
+        t(lang, "daily_title", total=total_earned, max=cat.TOTAL, bar=progress_bar(total_earned, cat.TOTAL))
     ]
-    if weekly:
-        lines.append(t(lang, "daily_weekly"))
-        lines.extend(weekly)
-        lines.append("")
+    routine_done = all(task in done for task, *_ in cat.DAILY_ROUTINE)
+    lines.append(t(lang, "daily_routine_done" if routine_done else "daily_routine"))
 
-    st = streak_lines(store, chat_id, today, earned, lang)
-    if st:
-        lines.append(t(lang, "daily_streaks"))
-        lines.append(t(lang, "daily_streaks_hint"))
-        lines.extend(st)
-        lines.append("")
+    targets = next_targets(earned, limit=1)
+    if targets:
+        lines.append(t(lang, "daily_focus", badge=targets[0].name, how=focus_tip(targets[0], lang)))
 
-    lines.append(f"_{motivation(lang)}_")
-    lines.append(t(lang, "daily_footer"))
+    streak = best_streak_line(store, chat_id, today, earned, lang)
+    if streak:
+        lines.append(streak)
+
+    if today.weekday() in WEEKLY_REMINDER_DAYS:
+        weekly = [
+            f"{icon} {t(lang, f'task_{task}')}"
+            for task, icon, *_ in cat.WEEKLY_ROUTINE
+            if _weekly_pending(store, chat_id, task, today, earned)
+        ]
+        if weekly:
+            lines.append(t(lang, "daily_weekly", tasks=" · ".join(weekly)))
     return "\n".join(lines)
 
 
