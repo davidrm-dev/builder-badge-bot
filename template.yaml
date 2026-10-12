@@ -35,8 +35,13 @@ Parameters:
     Type: Number
     Default: 15
     Description: Cada cuántos minutos corre el scheduler (debe coincidir con el cron).
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: Correo para las alarmas de errores de las Lambdas (vacío = sin alarmas).
 
 Conditions:
+  HasAlerts: !Not [!Equals [!Ref AlertEmail, ""]]
   HasPublicBaseUrl: !Not [!Equals [!Ref PublicBaseUrl, ""]]
 
 Globals:
@@ -170,6 +175,53 @@ Resources:
             Name: !Sub "${AWS::StackName}-tick"
             ScheduleExpression: !Sub "rate(${ScheduleWindowMinutes} minutes)"
             Description: Revisa quién tiene recordatorio pendiente en su hora local.
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasAlerts
+    Properties:
+      TopicName: !Sub "${AWS::StackName}-alerts"
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+
+  SchedulerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlerts
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-scheduler-errors"
+      AlarmDescription: El scheduler de recordatorios falló (incluye reintentos agotados con Telegram).
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref SchedulerFunction
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+  WebhookErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlerts
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-webhook-errors"
+      AlarmDescription: La Lambda del webhook de Telegram está fallando.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref WebhookFunction
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
 
 Outputs:
   WebhookUrl:

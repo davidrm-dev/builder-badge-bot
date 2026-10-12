@@ -131,6 +131,36 @@
       ]
     },
     {
+      "Sid": "AlarmasDelBot",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:DeleteAlarms",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:TagResource",
+        "cloudwatch:UntagResource",
+        "cloudwatch:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:cloudwatch:*:*:alarm:builder-badge-bot*"
+    },
+    {
+      "Sid": "TopicoDeAlertas",
+      "Effect": "Allow",
+      "Action": [
+        "sns:CreateTopic",
+        "sns:DeleteTopic",
+        "sns:GetTopicAttributes",
+        "sns:SetTopicAttributes",
+        "sns:Subscribe",
+        "sns:Unsubscribe",
+        "sns:ListSubscriptionsByTopic",
+        "sns:TagResource",
+        "sns:UntagResource",
+        "sns:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:sns:*:*:builder-badge-bot*"
+    },
+    {
       "Sid": "SoloLectura",
       "Effect": "Allow",
       "Action": ["sts:GetCallerIdentity", "ssm:DescribeParameters", "logs:DescribeLogGroups"],

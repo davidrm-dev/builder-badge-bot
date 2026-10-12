@@ -139,6 +139,12 @@ curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
 
 Para borrar todo: `sam delete --stack-name builder-badge-bot`.
 
+**Alarmas (opcional):** agrega `AlertEmail=tu@correo.com` a `--parameter-overrides` y el stack crea
+un tópico SNS y dos alarmas de CloudWatch que avisan si alguna Lambda falla en la última hora.
+AWS te manda un correo para confirmar la suscripción. Sin ese parámetro no se crea nada.
+El scheduler ya reintenta los cortes de red con Telegram (3 intentos con backoff), así que una
+alarma significa que los reintentos se agotaron o que falló algo más.
+
 Si despliegas con un usuario dedicado en vez de tu cuenta admin, en
 [`docs/deploy-policy.json`](docs/deploy-policy.json) está la política mínima: solo permite tocar
 recursos `builder-badge-bot*` y el bucket de artefactos de SAM.
