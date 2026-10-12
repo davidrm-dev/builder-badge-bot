@@ -139,6 +139,8 @@ def test_daily_email_is_short_with_checkin_links_and_unsubscribe(env):
     assert email.html.count("/c?t=") == 6  # 4 diarias + 2 semanales pendientes
     assert email.unsubscribe.startswith(f"{BASE}/u?t=")
     assert "<script" not in email.html
+    assert "🎯 Hello, World!" in email.html and "https://builder.aws.com/profile" in email.text
+    assert "profile?tab=badges#activity" in email.text
 
 
 def test_checkin_get_only_prompts_post_marks_and_is_idempotent(env):

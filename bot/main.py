@@ -68,6 +68,12 @@ def routine_keyboard(chat_id: int, day: date, lang: str) -> InlineKeyboardMarkup
             row = []
     if row:
         rows.append(row)
+    targets = coach.next_targets(coach.earned_keys(store, chat_id), limit=1)
+    if targets:
+        rows.append([
+            InlineKeyboardButton(t(lang, "btn_focus", badge=targets[0].name), url=targets[0].url),
+            link_button(lang, "btn_progress", "badges"),
+        ])
     rows.append([link_button(lang, "btn_open", "home"), link_button(lang, "btn_read", "learn")])
     rows.append([link_button(lang, "btn_write", "write"), link_button(lang, "btn_wishlist", "wishlist")])
     rows.append([

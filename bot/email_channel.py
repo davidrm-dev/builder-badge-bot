@@ -187,12 +187,19 @@ def daily_email(
     if links:
         body += f'<p style="margin-bottom:4px">{html.escape(t(lang, "email_checkin"))}</p>'
         body += "<p>" + "".join(button(url, f"✅ {label}") for label, url in links) + "</p>"
-    body += "<p>" + button(cat.LINKS["home"], t(lang, "web_open_bc"), primary=False)
+    targets = coach.next_targets(coach.earned_keys(store, user.chat_id), limit=1)
+    body += "<p>"
+    if targets:
+        body += button(targets[0].url, t(lang, "btn_focus", badge=targets[0].name), primary=False)
+    body += button(cat.LINKS["badges"], t(lang, "btn_progress"), primary=False)
     body += button(me, t(lang, "email_btn_progress"), primary=False) + "</p>"
 
     text = "\n\n".join(md_to_text(b) for b in blocks_md)
     if links:
         text += f"\n\n{t(lang, 'email_checkin')}\n" + "\n".join(f"✅ {label}: {url}" for label, url in links)
+    if targets:
+        text += f"\n\n{t(lang, 'btn_focus', badge=targets[0].name)}: {targets[0].url}"
+    text += f"\n{t(lang, 'btn_progress')}: {cat.LINKS['badges']}"
     text += f"\n\n{t(lang, 'email_btn_progress')}: {me}\n\n{footer_text}"
 
     subject_key = "email_congrats_subject" if new_names else "email_daily_subject"

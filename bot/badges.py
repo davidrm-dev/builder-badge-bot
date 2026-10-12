@@ -14,6 +14,9 @@ LINKS = {
     "profile": f"{BASE}/profile",
     "settings": f"{BASE}/settings",
     "rewards": f"{BASE}/profile/rewards",
+    # Pestaña de badges del dueño: con sesión iniciada muestra el avance exacto de cada una
+    # (ListUserBadgeProgress, que la API solo entrega al propio usuario).
+    "badges": f"{BASE}/profile?tab=badges#activity",
     "spaces": f"{BASE}/connect/spaces",
 }
 
@@ -52,7 +55,7 @@ CATALOG: tuple[Badge, ...] = (
         target=None,
         how_es="Completa la sección About de tu perfil: bio, ubicación y redes. 2 minutos.",
         how_en="Fill in the About section of your profile: bio, location and links. 2 minutes.",
-        link="settings",
+        link="profile",
         api_ids=("activity_badge.profile.about",),
     ),
     Badge(
@@ -63,7 +66,7 @@ CATALOG: tuple[Badge, ...] = (
         target=None,
         how_es="Sube una foto de perfil y guarda los cambios.",
         how_en="Upload a profile picture and save.",
-        link="settings",
+        link="profile",
         api_ids=("activity_badge.profile.photo",),
     ),
     Badge(

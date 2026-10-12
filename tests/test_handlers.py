@@ -128,6 +128,8 @@ async def test_daily_keyboard_links_to_builder_center(env):
     markup = reply.await_args.kwargs["reply_markup"]
     urls = [b.url for row in markup.inline_keyboard for b in row if b.url]
     assert "https://builder.aws.com/" in urls
+    assert "https://builder.aws.com/profile" in urls  # foco: Photo Finisher → Edit profile
+    assert "https://builder.aws.com/profile?tab=badges#activity" in urls
 
 
 @pytest.mark.asyncio

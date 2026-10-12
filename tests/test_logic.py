@@ -164,3 +164,10 @@ def test_set_streak_replaces_previous_adjustment(store):
     # Ajustar de nuevo a 3: los sintéticos viejos se borran y se crean nuevos
     store.set_streak(chat, "like", 3, today)
     assert store.daily_streak(chat, "like", today) == 3
+
+
+def test_profile_badges_link_to_edit_profile_not_settings():
+    # La bio, ubicación y foto se editan con "Edit profile" en /profile; /settings es la cuenta.
+    assert cat.BY_KEY["hello_world"].url == "https://builder.aws.com/profile"
+    assert cat.BY_KEY["photo_finisher"].url == "https://builder.aws.com/profile"
+    assert cat.LINKS["badges"] == "https://builder.aws.com/profile?tab=badges#activity"
