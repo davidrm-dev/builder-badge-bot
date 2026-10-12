@@ -130,6 +130,11 @@ Resources:
               Resource:
                 - !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${EmailDomain}"
                 - !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${EmailConfigSet}"
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
+                - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*"
             # En sandbox SES también autoriza contra la identidad del destinatario; se permite
             # cualquier destinatario, pero solo con remitente del dominio propio.
             - Effect: Allow
