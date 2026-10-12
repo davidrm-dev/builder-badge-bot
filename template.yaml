@@ -130,6 +130,14 @@ Resources:
               Resource:
                 - !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${EmailDomain}"
                 - !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${EmailConfigSet}"
+            # En sandbox SES también autoriza contra la identidad del destinatario; se permite
+            # cualquier destinatario, pero solo con remitente del dominio propio.
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource: !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
+              Condition:
+                StringLike:
+                  ses:FromAddress: !Sub "*@${EmailDomain}"
 
   WebhookFunction:
     Type: AWS::Serverless::Function
@@ -179,6 +187,14 @@ Resources:
               Resource:
                 - !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${EmailDomain}"
                 - !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${EmailConfigSet}"
+            # En sandbox SES también autoriza contra la identidad del destinatario; se permite
+            # cualquier destinatario, pero solo con remitente del dominio propio.
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource: !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
+              Condition:
+                StringLike:
+                  ses:FromAddress: !Sub "*@${EmailDomain}"
             - Effect: Allow
               Action: ssm:GetParameter
               Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${TokenParameter}"
