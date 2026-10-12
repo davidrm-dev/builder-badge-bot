@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -18,6 +19,9 @@ CREATE TABLE IF NOT EXISTS users (
     minute      INTEGER NOT NULL DEFAULT 0,
     enabled     INTEGER NOT NULL DEFAULT 1,
     lang        TEXT NOT NULL DEFAULT 'es',
+    email       TEXT,
+    last_daily  TEXT,
+    confirm_at  REAL,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS badges (
@@ -54,6 +58,20 @@ class User:
     minute: int
     enabled: bool
     lang: str = "es"
+    email: str | None = None  # usuarios del canal de correo; los de Telegram no tienen
+
+    @property
+    def channel(self) -> str:
+        return "email" if self.email else "telegram"
+
+
+# Los usuarios de correo usan ids negativos fuera del rango de Telegram (|chat_id| < 2**53),
+# así comparten tablas y lógica sin chocar con un chat real.
+EMAIL_ID_MIN, EMAIL_ID_MAX = -(2**62), -(2**53)
+
+
+def new_email_user_id() -> int:
+    return EMAIL_ID_MIN + secrets.randbelow(EMAIL_ID_MAX - EMAIL_ID_MIN)
 
 
 class Store:
@@ -73,6 +91,10 @@ class Store:
         checkin_cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(checkins)")}
         if "synthetic" not in checkin_cols:
             self._conn.execute("ALTER TABLE checkins ADD COLUMN synthetic INTEGER NOT NULL DEFAULT 0")
+        for col, kind in (("email", "TEXT"), ("last_daily", "TEXT"), ("confirm_at", "REAL")):
+            if col not in cols:
+                self._conn.execute(f"ALTER TABLE users ADD COLUMN {col} {kind}")
+        self._conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_email ON users (email)")
 
     # ---------------- usuarios ----------------
     def ensure_user(self, chat_id: int) -> User:
@@ -102,7 +124,29 @@ class Store:
             minute=row["minute"],
             enabled=bool(row["enabled"]),
             lang=row["lang"],
+            email=row["email"],
         )
+
+    def create_email_user(self, email: str, lang: str) -> tuple[User, bool]:
+        """Crea un usuario de correo pausado hasta que confirme. Devuelve (usuario, es_nuevo)."""
+        existing = self.get_user_by_email(email)
+        if existing:
+            return existing, False
+        while True:
+            uid = new_email_user_id()
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO users (chat_id, email, lang, enabled) VALUES (?, ?, ?, 0)",
+                (uid, email, lang),
+            )
+            if cur.rowcount:
+                self._conn.commit()
+                user = self.get_user(uid)
+                assert user is not None
+                return user, True
+
+    def get_user_by_email(self, email: str) -> User | None:
+        row = self._conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+        return self._to_user(row) if row else None
 
     def set_profile(self, chat_id: int, alias: str, bp_id: str, name: str) -> None:
         self.ensure_user(chat_id)
@@ -137,6 +181,23 @@ class Store:
     def delete_user(self, chat_id: int) -> None:
         for table in ("users", "badges", "checkins", "tiers"):
             self._conn.execute(f"DELETE FROM {table} WHERE chat_id = ?", (chat_id,))
+        self._conn.commit()
+
+    # ---------------- control de envíos ----------------
+    def last_daily_sent(self, chat_id: int) -> str | None:
+        row = self._conn.execute("SELECT last_daily FROM users WHERE chat_id = ?", (chat_id,)).fetchone()
+        return row["last_daily"] if row else None
+
+    def mark_daily_sent(self, chat_id: int, day: date) -> None:
+        self._conn.execute("UPDATE users SET last_daily = ? WHERE chat_id = ?", (day.isoformat(), chat_id))
+        self._conn.commit()
+
+    def last_confirm_sent(self, chat_id: int) -> float | None:
+        row = self._conn.execute("SELECT confirm_at FROM users WHERE chat_id = ?", (chat_id,)).fetchone()
+        return row["confirm_at"] if row else None
+
+    def mark_confirm_sent(self, chat_id: int, epoch: float) -> None:
+        self._conn.execute("UPDATE users SET confirm_at = ? WHERE chat_id = ?", (epoch, chat_id))
         self._conn.commit()
 
     # ---------------- badges ----------------

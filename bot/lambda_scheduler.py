@@ -1,21 +1,23 @@
 """Lambda disparada por EventBridge Scheduler: manda el recordatorio a quien le toca.
 
 Corre cada N minutos (15 por defecto) y revisa la hora local de cada usuario, así el
-bot respeta la zona horaria de cada quien sin crear un schedule por usuario.
+bot respeta la zona horaria de cada quien sin crear un schedule por usuario. Cada usuario
+recibe la misión por su canal: Telegram o correo.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from datetime import datetime
 
-from telegram import Bot
-from telegram.error import Forbidden
+from botocore.exceptions import ClientError
 
-from .config import telegram_token
-from .main import send_daily, store, user_tz
+from . import email_channel
+from .config import public_base_url, telegram_configured
+from .core import get_store, user_tz
 
 log = logging.getLogger("builder-badge-bot.scheduler")
 WINDOW_MIN = int(os.environ.get("SCHEDULE_WINDOW_MINUTES", "15"))
@@ -31,8 +33,9 @@ def _due(user, now: datetime) -> bool:
 
 
 async def _run() -> int:
-    bot = Bot(telegram_token())
-    async with bot:
+    store = get_store()
+    async with contextlib.AsyncExitStack() as stack:
+        bot = None  # Telegram se inicializa solo si hay a quién escribirle por ahí
         sent = 0
         for user in store.all_users():
             if not user.enabled or not user.bp_id:
@@ -40,13 +43,35 @@ async def _run() -> int:
             now = datetime.now(user_tz(user))
             if not _due(user, now) or store.last_daily_sent(user.chat_id) == now.date().isoformat():
                 continue
-            try:
-                await send_daily(bot, user.chat_id)
-                store.mark_daily_sent(user.chat_id, now.date())
-                sent += 1
-            except Forbidden:
-                log.warning("El usuario %s bloqueó el bot; lo pauso", user.chat_id)
-                store.set_enabled(user.chat_id, False)
+            if user.channel == "email":
+                base = public_base_url()
+                if not base:
+                    log.error("Falta PUBLIC_BASE_URL: no puedo armar enlaces para %s", user.chat_id)
+                    continue
+                try:
+                    email_channel.send_daily(store, user, base)
+                except ClientError as exc:
+                    log.warning("SES rechazó el correo de %s: %s", user.chat_id, exc)
+                    continue
+            else:
+                if not telegram_configured():
+                    continue
+                from telegram import Bot
+                from telegram.error import Forbidden
+
+                from .config import telegram_token
+                from .main import send_daily
+
+                if bot is None:
+                    bot = await stack.enter_async_context(Bot(telegram_token()))
+                try:
+                    await send_daily(bot, user.chat_id)
+                except Forbidden:
+                    log.warning("El usuario %s bloqueó el bot; lo pauso", user.chat_id)
+                    store.set_enabled(user.chat_id, False)
+                    continue
+            store.mark_daily_sent(user.chat_id, now.date())
+            sent += 1
         return sent
 
 

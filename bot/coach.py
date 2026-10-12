@@ -217,7 +217,7 @@ def daily_message(store: Store, chat_id: int, today: date, lang: str = "es") -> 
         weekly = [
             f"{icon} {t(lang, f'task_{task}')}"
             for task, icon, *_ in cat.WEEKLY_ROUTINE
-            if _weekly_pending(store, chat_id, task, today, earned)
+            if weekly_pending(store, chat_id, task, today, earned)
         ]
         if weekly:
             lines.append(t(lang, "daily_weekly", tasks=" · ".join(weekly)))
@@ -227,7 +227,7 @@ def daily_message(store: Store, chat_id: int, today: date, lang: str = "es") -> 
 _WEEKLY_BADGE = {"article_week": "article_4w", "wish_vote_week": "wish_vote_4w"}
 
 
-def _weekly_pending(store: Store, chat_id: int, task: str, today: date, earned: set[str]) -> bool:
+def weekly_pending(store: Store, chat_id: int, task: str, today: date, earned: set[str]) -> bool:
     if _WEEKLY_BADGE[task] in earned:
         return False
     return not _week_done(store, chat_id, task, today)

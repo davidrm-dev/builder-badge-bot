@@ -7,6 +7,7 @@ Diseño de la tabla (PK/SK):
     U#<chat_id> | BADGE#<badge_id>         → badge ya otorgada por AWS
     U#<chat_id> | CHK#<YYYY-MM-DD>#<task>  → check-in manual (con TTL)
     U#<chat_id> | TIER#<n>                 → hito de recompensa ya anunciado
+    E#<email>   | EMAIL                    → índice correo → chat_id (canal de correo)
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from decimal import Decimal
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
 
-from .db import User
+from .db import User, new_email_user_id
 
 CHECKIN_TTL_DAYS = 400
 
@@ -85,7 +86,43 @@ class DynamoStore:
             minute=_num(item.get("minute")),
             enabled=bool(item.get("enabled", True)),
             lang=item.get("lang") or "es",
+            email=item.get("email"),
         )
+
+    def create_email_user(self, email: str, lang: str) -> tuple[User, bool]:
+        """Crea un usuario de correo pausado hasta que confirme. Devuelve (usuario, es_nuevo)."""
+        existing = self.get_user_by_email(email)
+        if existing:
+            return existing, False
+        uid = new_email_user_id()
+        try:
+            # El índice va primero: si dos registros con el mismo correo compiten, gana uno solo.
+            self.table.put_item(
+                Item={"pk": f"E#{email}", "sk": "EMAIL", "chat_id": uid},
+                ConditionExpression=Attr("pk").not_exists(),
+            )
+        except self.table.meta.client.exceptions.ConditionalCheckFailedException:
+            user = self.get_user_by_email(email)
+            assert user is not None
+            return user, False
+        item = {
+            "pk": _pk(uid),
+            "sk": "PROFILE",
+            "chat_id": uid,
+            "email": email,
+            "lang": lang,
+            "tz": os.environ.get("BOT_DEFAULT_TZ", "America/Bogota"),
+            "hour": 9,
+            "minute": 0,
+            "enabled": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        self.table.put_item(Item=item)
+        return self._to_user(item), True
+
+    def get_user_by_email(self, email: str) -> User | None:
+        item = self.table.get_item(Key={"pk": f"E#{email}", "sk": "EMAIL"}).get("Item")
+        return self.get_user(_num(item["chat_id"])) if item else None
 
     def _update_profile(self, chat_id: int, values: dict) -> None:
         self.ensure_user(chat_id)
@@ -114,6 +151,9 @@ class DynamoStore:
         self._update_profile(chat_id, {"enabled": enabled})
 
     def delete_user(self, chat_id: int) -> None:
+        user = self.get_user(chat_id)
+        if user and user.email:
+            self.table.delete_item(Key={"pk": f"E#{user.email}", "sk": "EMAIL"})
         with self.table.batch_writer() as batch:
             for item in self._items(chat_id):
                 batch.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
@@ -279,3 +319,11 @@ class DynamoStore:
 
     def mark_daily_sent(self, chat_id: int, day: date) -> None:
         self._update_profile(chat_id, {"last_daily": day.isoformat()})
+
+    def last_confirm_sent(self, chat_id: int) -> float | None:
+        item = self.table.get_item(Key={"pk": _pk(chat_id), "sk": "PROFILE"}).get("Item") or {}
+        value = item.get("confirm_at")
+        return float(value) if value is not None else None
+
+    def mark_confirm_sent(self, chat_id: int, epoch: float) -> None:
+        self._update_profile(chat_id, {"confirm_at": Decimal(str(epoch))})

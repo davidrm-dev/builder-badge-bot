@@ -1,6 +1,6 @@
 # Builder Badge Bot
 
-Bot de Telegram que acompaña a un builder a completar las **21 badges de AWS Builder Center**
+Coach por **Telegram o correo** que acompaña a un builder a completar las **21 badges de AWS Builder Center**
 (las del reto que da $10 / $20 en créditos y el voucher de certificación).
 
 Le mandas tu usuario de Builder Center, el bot lee tus badges desde la API pública, y todos los
@@ -35,6 +35,41 @@ todos los textos viven en `bot/i18n.py`; agregar un idioma es añadir una clave 
 Los mensajes traen botones que abren directo la sección de Builder Center que toca (leer,
 escribir, wishlist, recompensas, tu perfil).
 
+## Canal de correo
+
+Para quien no usa Telegram: se inscribe en una página web con su correo, su alias y la hora, confirma
+desde el correo y recibe cada día la misión (≤5 líneas) con botones de check-in.
+
+- Los correos no reciben comandos, así que cada acción es un enlace firmado con HMAC
+  (`EMAIL_LINK_SECRET`): confirmar, marcar un check-in, ver progreso y ajustes, darse de baja.
+- Abrir un enlace de check-in no marca nada por sí solo: la página hace un POST con JS, porque los
+  filtros de Outlook/Gmail abren los enlaces para escanearlos.
+- Cada correo diario lleva `List-Unsubscribe` de un clic (lo exigen Gmail y Yahoo).
+- Los usuarios de correo comparten tablas y lógica con los de Telegram (`bot/core.py`); WhatsApp
+  entraría igual, como otro canal.
+
+| Ruta | Para qué |
+| --- | --- |
+| `/` | inscripción |
+| `/confirm` | confirma el correo y activa los envíos |
+| `/c` | check-in de una tarea |
+| `/me` | progreso, rachas, tablero y ajustes (hora, zona, idioma, pausa, borrar) |
+| `/u` | baja |
+
+### Configurar el dominio (una vez)
+
+1. Despliega (abajo). El stack crea la identidad de SES para `EmailDomain` y deja en el output
+   `DkimRecords` 3 registros CNAME: créalos en el DNS de tu dominio (donde lo compraste o en
+   Route 53). SES lo verifica solo en unos minutos.
+2. Recomendado: un TXT de DMARC, `_dmarc.davidrmdev.com` → `v=DMARC1; p=none;`.
+3. SES arranca en *sandbox*: solo envía a direcciones verificadas (sirve para probar con la tuya).
+   Para abrirlo a todos, pide acceso de producción en la consola de SES → *Account dashboard*.
+4. Comparte el `SignupUrl` del output. Si quieres algo como `coach.davidrmdev.com`, ponlo delante
+   con CloudFront y pásalo en `PublicBaseUrl`.
+
+Si el dominio ya está verificado en SES en esa región, bórralo de la consola antes de desplegar
+(CloudFormation no puede adoptar una identidad existente).
+
 ## Correr local
 
 ```bash
@@ -64,7 +99,8 @@ de SQLite y los recordatorios los dispara EventBridge Scheduler en vez del job q
 Telegram ──webhook──▶ Lambda Function URL (bot.lambda_webhook)
                           │
 EventBridge Scheduler ─▶ Lambda (bot.lambda_scheduler) ──▶ DynamoDB  ──▶ api.builder.aws.com
-                          (cada 15 min, filtra por hora local de cada usuario)
+                          (cada 15 min, filtra por hora local) ──▶ Telegram / Amazon SES
+Navegador ──────────────▶ Lambda Function URL (bot.web): inscripción, check-ins, ajustes
 ```
 
 | Recurso | Para qué | Costo típico |
@@ -73,6 +109,8 @@ EventBridge Scheduler ─▶ Lambda (bot.lambda_scheduler) ──▶ DynamoDB  �
 | DynamoDB on-demand | usuarios, badges, check-ins (TTL 400 días) | free tier: 25 GB |
 | EventBridge Scheduler | ~2.900 invocaciones/mes | free tier: 14M invocaciones |
 | SSM Parameter Store | token de BotFather (SecureString) | Standard: gratis |
+| Amazon SES | correo diario y confirmaciones | ~$0,10 por 1.000 correos |
+| Lambda web (Function URL) | páginas de inscripción, check-in y ajustes | free tier |
 
 Los precios dependen de región, fecha y uso; verifica en la calculadora de AWS.
 
@@ -84,10 +122,13 @@ aws ssm put-parameter --name /builder-badge-bot/telegram-token \
 # 2. secreto del webhook: Telegram lo manda en cada request y la Lambda lo valida
 WEBHOOK_SECRET=$(openssl rand -hex 32)
 
-# 3. desplegar
+# 3. desplegar (EMAIL_LINK_SECRET firma los enlaces de los correos: guárdalo, si cambia
+#    los enlaces de baja de correos viejos dejan de funcionar)
+EMAIL_LINK_SECRET=$(openssl rand -hex 32)
 sam build
 sam deploy --stack-name builder-badge-bot --resolve-s3 --capabilities CAPABILITY_IAM \
-  --parameter-overrides WebhookSecret=$WEBHOOK_SECRET
+  --parameter-overrides WebhookSecret=$WEBHOOK_SECRET EmailLinkSecret=$EMAIL_LINK_SECRET \
+    EmailDomain=davidrmdev.com "EmailFrom=Builder Badge Coach <coach@davidrmdev.com>"
 
 # 4. registrar el webhook
 URL=$(aws cloudformation describe-stacks --stack-name builder-badge-bot \

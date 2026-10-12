@@ -102,6 +102,35 @@
       "Resource": "arn:aws:logs:*:*:log-group:/aws/lambda/builder-badge-bot-*"
     },
     {
+      "Sid": "CorreoConSes",
+      "Effect": "Allow",
+      "Action": [
+        "ses:CreateEmailIdentity",
+        "ses:DeleteEmailIdentity",
+        "ses:GetEmailIdentity",
+        "ses:PutEmailIdentityDkimSigningAttributes",
+        "ses:PutEmailIdentityDkimAttributes",
+        "ses:PutEmailIdentityConfigurationSetAttributes",
+        "ses:PutEmailIdentityFeedbackAttributes",
+        "ses:PutEmailIdentityMailFromAttributes",
+        "ses:CreateConfigurationSet",
+        "ses:DeleteConfigurationSet",
+        "ses:GetConfigurationSet",
+        "ses:PutConfigurationSetSuppressionOptions",
+        "ses:PutConfigurationSetSendingOptions",
+        "ses:PutConfigurationSetReputationOptions",
+        "ses:PutConfigurationSetDeliveryOptions",
+        "ses:PutConfigurationSetTrackingOptions",
+        "ses:TagResource",
+        "ses:UntagResource",
+        "ses:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:ses:*:*:identity/*",
+        "arn:aws:ses:*:*:configuration-set/builder-badge-bot*"
+      ]
+    },
+    {
       "Sid": "SoloLectura",
       "Effect": "Allow",
       "Action": ["sts:GetCallerIdentity", "ssm:DescribeParameters", "logs:DescribeLogGroups"],

@@ -84,3 +84,19 @@ def test_marcas_de_envio_y_borrado(store):
     store.save_badge(1, "b1", None, "Otra", None)
     store.delete_user(1)
     assert store.get_user(1) is None and store.badge_count(1) == 0
+
+
+def test_usuarios_de_correo(store):
+    user, created = store.create_email_user("dev@example.com", "en")
+    assert created and user.chat_id < 0 and user.channel == "email" and not user.enabled
+    again, created = store.create_email_user("dev@example.com", "es")
+    assert not created and again.chat_id == user.chat_id
+    assert store.get_user_by_email("dev@example.com").lang == "en"
+    assert user.chat_id in {u.chat_id for u in store.all_users()}
+
+    store.mark_confirm_sent(user.chat_id, 1234.5)
+    assert store.last_confirm_sent(user.chat_id) == 1234.5
+
+    store.delete_user(user.chat_id)
+    assert store.get_user_by_email("dev@example.com") is None
+    assert store.create_email_user("dev@example.com", "es")[1]

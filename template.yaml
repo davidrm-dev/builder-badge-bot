@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: Bot de Telegram que acompaña a completar las 21 badges de AWS Builder Center (serverless).
+Description: Coach para las 21 badges de AWS Builder Center por Telegram y correo (serverless).
 
 Parameters:
   TokenParameter:
@@ -14,10 +14,30 @@ Parameters:
   DefaultTimezone:
     Type: String
     Default: America/Bogota
+  EmailDomain:
+    Type: String
+    Default: davidrmdev.com
+    Description: Dominio desde el que se mandan los correos (SES lo verifica con 3 CNAME de DKIM).
+  EmailFrom:
+    Type: String
+    Default: "Builder Badge Coach <coach@davidrmdev.com>"
+    Description: Remitente; debe ser una dirección del dominio EmailDomain (no necesita buzón).
+  EmailLinkSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: Clave para firmar los enlaces de los correos (openssl rand -hex 32).
+  PublicBaseUrl:
+    Type: String
+    Default: ""
+    Description: Dominio propio para las páginas (ej. https://coach.davidrmdev.com). Vacío = Function URL.
   ScheduleWindowMinutes:
     Type: Number
     Default: 15
     Description: Cada cuántos minutos corre el scheduler (debe coincidir con el cron).
+
+Conditions:
+  HasPublicBaseUrl: !Not [!Equals [!Ref PublicBaseUrl, ""]]
 
 Globals:
   Function:
@@ -30,6 +50,9 @@ Globals:
         BOT_TABLE: !Ref Table
         BOT_DEFAULT_TZ: !Ref DefaultTimezone
         TOKEN_PARAMETER: !Ref TokenParameter
+        EMAIL_FROM: !Ref EmailFrom
+        EMAIL_LINK_SECRET: !Ref EmailLinkSecret
+        SES_CONFIGURATION_SET: !Ref EmailConfigSet
 
 Resources:
   Table:
@@ -49,6 +72,44 @@ Resources:
       TimeToLiveSpecification:
         AttributeName: ttl
         Enabled: true
+
+  EmailConfigSet:
+    Type: AWS::SES::ConfigurationSet
+    Properties:
+      Name: !Sub "${AWS::StackName}-email"
+      # Rebotes y quejas van a la lista de supresión: no se reintenta a esas direcciones
+      # y la reputación del dominio no se daña.
+      SuppressionOptions:
+        SuppressedReasons: [BOUNCE, COMPLAINT]
+
+  EmailIdentity:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Ref EmailDomain
+      ConfigurationSetAttributes:
+        ConfigurationSetName: !Ref EmailConfigSet
+      DkimSigningAttributes:
+        NextSigningKeyLength: RSA_2048_BIT
+
+  WebFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: bot.web.handler
+      Environment:
+        Variables:
+          PUBLIC_BASE_URL: !Ref PublicBaseUrl
+      FunctionUrlConfig:
+        AuthType: NONE
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+        - Statement:
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource:
+                - !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${EmailDomain}"
+                - !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${EmailConfigSet}"
 
   WebhookFunction:
     Type: AWS::Serverless::Function
@@ -83,10 +144,16 @@ Resources:
       Environment:
         Variables:
           SCHEDULE_WINDOW_MINUTES: !Ref ScheduleWindowMinutes
+          PUBLIC_BASE_URL: !If [HasPublicBaseUrl, !Ref PublicBaseUrl, !GetAtt WebFunctionUrl.FunctionUrl]
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref Table
         - Statement:
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource:
+                - !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${EmailDomain}"
+                - !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${EmailConfigSet}"
             - Effect: Allow
               Action: ssm:GetParameter
               Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${TokenParameter}"
@@ -108,5 +175,15 @@ Outputs:
   WebhookUrl:
     Description: URL que hay que registrar en Telegram con setWebhook.
     Value: !GetAtt WebhookFunctionUrl.FunctionUrl
+  SignupUrl:
+    Description: Página de inscripción por correo (compártela con los builders).
+    Value: !If [HasPublicBaseUrl, !Ref PublicBaseUrl, !GetAtt WebFunctionUrl.FunctionUrl]
+  DkimRecords:
+    Description: 3 registros CNAME que hay que crear en el DNS del dominio para que SES lo verifique.
+    Value: !Join
+      - "  |  "
+      - - !Join [" CNAME ", [!GetAtt EmailIdentity.DkimDNSTokenName1, !GetAtt EmailIdentity.DkimDNSTokenValue1]]
+        - !Join [" CNAME ", [!GetAtt EmailIdentity.DkimDNSTokenName2, !GetAtt EmailIdentity.DkimDNSTokenValue2]]
+        - !Join [" CNAME ", [!GetAtt EmailIdentity.DkimDNSTokenName3, !GetAtt EmailIdentity.DkimDNSTokenValue3]]
   TableName:
     Value: !Ref Table
