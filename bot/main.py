@@ -7,7 +7,7 @@ import os
 import re
 from datetime import date, time
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import (
@@ -34,6 +34,14 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("builder-badge-bot")
 
 store = core.get_store()
+# URL de la Mini App (la misma Function URL). Vacía en local: entonces no se ofrece el panel.
+MINIAPP_URL = os.environ.get("MINIAPP_URL", "")
+# Cuántas cuentas de Telegram distintas pueden seguir el mismo perfil de Builder Center.
+MAX_LINKED_CHATS = int(os.environ.get("BOT_MAX_LINKED_CHATS", "3"))
+
+
+class ProfileLinkLimit(Exception):
+    """El perfil ya está seguido por el máximo de cuentas de Telegram permitidas."""
 
 
 # --------------------------------------------------------------------------- utilidades
@@ -46,6 +54,13 @@ def link_button(lang: str, key: str, link: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(t(lang, key), url=cat.LINKS[link])
 
 
+def app_row(lang: str) -> list[list[InlineKeyboardButton]]:
+    """Fila con el botón que abre la Mini App, si está desplegada."""
+    if not MINIAPP_URL:
+        return []
+    return [[InlineKeyboardButton(t(lang, "btn_app"), web_app=WebAppInfo(MINIAPP_URL))]]
+
+
 def lang_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton(LANG_NAMES[code], callback_data=f"lang:{code}") for code in LANGS]]
@@ -54,7 +69,7 @@ def lang_keyboard() -> InlineKeyboardMarkup:
 
 def routine_keyboard(chat_id: int, day: date, lang: str) -> InlineKeyboardMarkup:
     done = store.tasks_done(chat_id, day)
-    rows: list[list[InlineKeyboardButton]] = []
+    rows: list[list[InlineKeyboardButton]] = app_row(lang)
     row: list[InlineKeyboardButton] = []
     for task, icon, _es, _en, _link in cat.DAILY_ROUTINE + cat.WEEKLY_ROUTINE:
         mark = "✅" if task in done else "⬜"
@@ -117,7 +132,8 @@ def adv_action_keyboard(lang: str, metric: str) -> InlineKeyboardMarkup:
 def board_keyboard(lang: str, alias: str | None) -> InlineKeyboardMarkup:
     profile = cat.profile_url(alias) if alias else cat.LINKS["profile"]
     return InlineKeyboardMarkup(
-        [
+        app_row(lang)
+        + [
             [
                 InlineKeyboardButton(t(lang, "btn_profile"), url=profile),
                 link_button(lang, "btn_rewards", "rewards"),
@@ -132,13 +148,28 @@ def board_keyboard(lang: str, alias: str | None) -> InlineKeyboardMarkup:
 
 def welcome_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        [
+        app_row(lang)
+        + [
             [
                 InlineKeyboardButton(t(lang, "btn_today"), callback_data="today"),
                 link_button(lang, "btn_open", "home"),
             ]
         ]
     )
+
+
+def link_profile(chat_id: int, alias: str) -> api.Profile:
+    """Asocia un perfil público de Builder Center a este chat, con tope de cuentas por perfil.
+
+    Cualquiera puede seguir un alias público, pero las rachas y check-ins viven bajo el
+    chat_id firmado por Telegram, así que seguir a alguien nunca toca sus datos.
+    """
+    profile = api.get_profile(alias)
+    linked = store.chat_ids_for_profile(profile.builder_profile_id) - {chat_id}
+    if len(linked) >= MAX_LINKED_CHATS:
+        raise ProfileLinkLimit(profile.alias)
+    store.set_profile(chat_id, profile.alias, profile.builder_profile_id, profile.name)
+    return profile
 
 
 def sync_badges(chat_id: int, notify_new: bool = True) -> tuple[list[str], int, list[int]]:
@@ -238,16 +269,21 @@ async def set_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, alias:
     store.ensure_user(chat_id)
     lang = lang_of(chat_id)
     try:
-        profile = api.get_profile(alias)
+        profile = link_profile(chat_id, alias)
     except api.ProfileNotFound:
         await update.message.reply_text(
             t(lang, "profile_not_found", alias=alias), parse_mode=ParseMode.MARKDOWN
         )
         return
+    except ProfileLinkLimit:
+        await update.message.reply_text(
+            t(lang, "profile_limit", alias=alias, max=MAX_LINKED_CHATS),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
     except api.BuilderApiError as exc:
         await update.message.reply_text(t(lang, "api_down", error=exc))
         return
-    store.set_profile(chat_id, profile.alias, profile.builder_profile_id, profile.name)
     first_time = store.badge_count(chat_id) == 0
     try:
         _new, total, _tiers = sync_badges(chat_id, notify_new=not first_time)

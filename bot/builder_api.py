@@ -52,7 +52,9 @@ def get_profile(alias: str) -> Profile:
         )
     except requests.RequestException as exc:
         raise BuilderApiError(str(exc)) from exc
-    if resp.status_code == 404:
+    # Builder Center responde 400 a los alias con formato inválido: para el usuario es lo mismo
+    # que no existir, no una caída del servicio.
+    if resp.status_code in (400, 404):
         raise ProfileNotFound(alias)
     if not resp.ok:
         raise BuilderApiError(f"HTTP {resp.status_code}")

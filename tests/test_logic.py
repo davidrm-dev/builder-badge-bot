@@ -121,10 +121,10 @@ def test_set_streak_fills_synthetic_checkins(store):
     chat = 10
     store.ensure_user(chat)
     today = date(2026, 9, 26)
-    # Fijar racha de 5 días: debe insertar 4 días sintéticos hacia atrás
+    # Fijar racha de 5 días: los 5 días terminan hoy, incluido hoy
     store.set_streak(chat, "visit", 5, today)
-    assert store.daily_streak(chat, "visit", today) == 4  # hoy aún no marcado
-    # Marcar hoy → racha completa de 5
+    assert store.daily_streak(chat, "visit", today) == 5
+    # Marcar hoy de verdad no la duplica
     store.add_checkin(chat, today, "visit")
     assert store.daily_streak(chat, "visit", today) == 5
 
@@ -137,7 +137,6 @@ def test_set_streak_does_not_overwrite_real_checkins(store):
     store.add_checkin(chat, today - timedelta(days=1), "visit")
     # Ajustar a 3 días: debería insertar sintéticos para días 2 y 3 hacia atrás
     store.set_streak(chat, "visit", 3, today)
-    store.add_checkin(chat, today, "visit")
     assert store.daily_streak(chat, "visit", today) == 3
 
 
@@ -159,7 +158,6 @@ def test_set_streak_replaces_previous_adjustment(store):
     store.ensure_user(chat)
     today = date(2026, 9, 26)
     store.set_streak(chat, "like", 10, today)
-    store.add_checkin(chat, today, "like")
     assert store.daily_streak(chat, "like", today) == 10
     # Ajustar de nuevo a 3: los sintéticos viejos se borran y se crean nuevos
     store.set_streak(chat, "like", 3, today)
@@ -171,3 +169,51 @@ def test_profile_badges_link_to_edit_profile_not_settings():
     assert cat.BY_KEY["hello_world"].url == "https://builder.aws.com/profile"
     assert cat.BY_KEY["photo_finisher"].url == "https://builder.aws.com/profile"
     assert cat.LINKS["badges"] == "https://builder.aws.com/profile?tab=badges#activity"
+
+
+def test_set_streak_survives_next_day(store):
+    chat = 14
+    store.ensure_user(chat)
+    today = date(2026, 9, 26)
+    store.set_streak(chat, "visit", 5, today)
+    # Al día siguiente, sin marcar nada todavía, la racha sigue viva (no se reinicia a 0)
+    assert store.daily_streak(chat, "visit", today + timedelta(days=1)) == 5
+    store.add_checkin(chat, today + timedelta(days=1), "visit")
+    assert store.daily_streak(chat, "visit", today + timedelta(days=1)) == 6
+
+
+def test_todos_los_enlaces_del_catalogo_existen():
+    """Cada badge y cada paso de la rutina apunta a una URL real del catálogo."""
+    for badge in cat.CATALOG:
+        assert badge.url.startswith(cat.BASE)
+    for _task, _icon, _es, _en, link in cat.DAILY_ROUTINE + cat.WEEKLY_ROUTINE:
+        assert link in cat.LINKS
+
+
+def test_las_badges_de_perfil_llevan_a_la_pagina_de_perfil():
+    """Bio y foto se editan en /profile, no en /settings (que solo tiene idioma y tema)."""
+    for key in ("hello_world", "photo_finisher"):
+        assert cat.BY_KEY[key].url == cat.LINKS["profile"]
+
+
+def test_sincronizar_borra_las_insignias_que_ya_no_estan(monkeypatch, store, tmp_path):
+    from bot import builder_api as api, main as botmain
+
+    botmain.store = store
+    store.set_profile(1, "davidrm", "bp-1", "David")
+    store.save_badge(1, "vieja", None, "De otro perfil", 1.0)
+    monkeypatch.setattr(
+        api, "get_awarded_badges",
+        lambda bp_id: [
+            api.AwardedBadge(
+                badge_id="activity_badge.profile.about",
+                display_name="Hello, World!",
+                description="",
+                category="Getting Started",
+                awarded_epoch=2.0,
+            )
+        ],
+    )
+    _new, total, _tiers = botmain.sync_badges(1, notify_new=False)
+    assert total == 1
+    assert store.known_badge_ids(1) == {"activity_badge.profile.about"}

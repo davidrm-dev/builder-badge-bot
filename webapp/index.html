@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Builder Badge Bot</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #17212b);
+    --card: var(--tg-theme-secondary-bg-color, #202b36);
+    --fg: var(--tg-theme-text-color, #f5f5f5);
+    --muted: var(--tg-theme-hint-color, #8a9aa9);
+    --accent: var(--tg-theme-button-color, #2ea6ff);
+    --accent-fg: var(--tg-theme-button-text-color, #fff);
+    --ok: #3ecf8e;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 0 16px 96px; background: var(--bg); color: var(--fg);
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  h1 { font-size: 19px; margin: 18px 0 4px; }
+  h2 { font-size: 15px; margin: 22px 0 8px; color: var(--muted); font-weight: 600; }
+  p { margin: 4px 0; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .card { background: var(--card); border-radius: 14px; padding: 14px; margin: 10px 0; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .row + .row { margin-top: 10px; }
+  .grow { flex: 1; min-width: 0; }
+  .bar { height: 8px; border-radius: 4px; background: rgba(255,255,255,.12); overflow: hidden; margin: 10px 0 6px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
+  button, .btn {
+    font: inherit; border: 0; border-radius: 10px; padding: 10px 14px; cursor: pointer;
+    background: var(--accent); color: var(--accent-fg); text-decoration: none; display: inline-block;
+  }
+  button.ghost, .btn.ghost { background: rgba(255,255,255,.10); color: var(--fg); }
+  button:disabled { opacity: .5; }
+  input, select {
+    font: inherit; background: rgba(255,255,255,.08); color: var(--fg);
+    border: 1px solid rgba(255,255,255,.14); border-radius: 10px; padding: 9px 11px; width: 100%;
+  }
+  .task { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,.07); }
+  .task:last-child { border-bottom: 0; }
+  .check {
+    width: 26px; height: 26px; border-radius: 8px; flex: 0 0 auto; border: 1px solid rgba(255,255,255,.22);
+    background: transparent; color: var(--fg); padding: 0; line-height: 24px; text-align: center;
+  }
+  .check[data-done="1"] { background: var(--ok); border-color: var(--ok); color: #04231a; }
+  .badge { display: flex; gap: 10px; padding: 9px 0; align-items: flex-start; }
+  .badge .mark { flex: 0 0 auto; }
+  .badge.done .name { color: var(--ok); }
+  .badge .how { color: var(--muted); font-size: 13px; }
+  .pill { font-size: 12px; color: var(--muted); }
+  nav {
+    position: fixed; left: 0; right: 0; bottom: 0; display: flex; background: var(--card);
+    padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); gap: 8px;
+  }
+  nav button { flex: 1; background: transparent; color: var(--muted); padding: 8px 4px; font-size: 13px; }
+  nav button.on { background: rgba(255,255,255,.10); color: var(--fg); }
+  .hidden { display: none; }
+  .err { color: #ff6b6b; font-size: 13px; }
+</style>
+</head>
+<body>
+<main id="app"><p class="muted" id="boot">…</p></main>
+<nav class="hidden" id="nav"></nav>
+
+<script>
+const tg = window.Telegram?.WebApp;
+const T = {
+  es: {
+    today: "Hoy", badges: "Insignias", settings: "Ajustes",
+    routine: "Rutina de hoy", weekly: "Esta semana", streaks: "Rachas",
+    focus: "En qué enfocarte", open: "Abrir Builder Center", sync: "Sincronizar insignias",
+    profile_title: "Tu perfil de Builder Center", alias_ph: "tu-alias o la URL de tu perfil",
+    save: "Guardar", time: "Hora del recordatorio", tz: "Zona horaria", lang: "Idioma",
+    reminders: "Recordatorios diarios", on: "Activados", off: "Pausados",
+    adjust: "Ajustar", days: "días", weeks: "semanas", of: "de", set_streak: "¿Cuántos días llevas?",
+    saved: "Listo", not_found: "No encontré ese perfil en Builder Center",
+    api_down: "Builder Center no responde ahora mismo", error: "Algo falló, intenta de nuevo",
+    bad_number: "Escribe solo el número de días (ej. 12)",
+    no_profile: "Conecta tu perfil para ver tus insignias.", done_all: "¡Completaste las 21! 🏆",
+    view_profile: "Ver mi perfil",
+    limit: "Ese perfil ya lo siguen 3 cuentas de Telegram, que es el máximo.",
+  },
+  en: {
+    today: "Today", badges: "Badges", settings: "Settings",
+    routine: "Today's routine", weekly: "This week", streaks: "Streaks",
+    focus: "What to focus on", open: "Open Builder Center", sync: "Sync badges",
+    profile_title: "Your Builder Center profile", alias_ph: "your-alias or your profile URL",
+    save: "Save", time: "Reminder time", tz: "Timezone", lang: "Language",
+    reminders: "Daily reminders", on: "On", off: "Paused",
+    adjust: "Adjust", days: "days", weeks: "weeks", of: "of", set_streak: "How many days so far?",
+    saved: "Done", not_found: "I couldn't find that Builder Center profile",
+    api_down: "Builder Center is not responding right now", error: "Something failed, try again",
+    bad_number: "Type just the number of days (e.g. 12)",
+    no_profile: "Connect your profile to see your badges.", done_all: "All 21 done! 🏆",
+    view_profile: "View my profile",
+    limit: "That profile is already followed by 3 Telegram accounts, the maximum.",
+  },
+};
+
+let state = null;
+let tab = "today";
+const $ = (sel) => document.querySelector(sel);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const tr = (k) => (T[state?.lang] || T.es)[k];
+
+async function call(path, body = {}) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ initData: tg?.initData || "", ...body }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(data.error || res.status), { code: data.error });
+  state = data;
+  return data;
+}
+
+function errText(err) {
+  if (err.code === "profile_not_found") return tr("not_found");
+  if (err.code === "builder_api") return tr("api_down");
+  if (err.code === "profile_limit") return tr("limit");
+  return tr("error");
+}
+
+// Dentro de Telegram, target=_blank no abre nada: hay que pedirle al cliente que abra la URL.
+document.addEventListener("click", (ev) => {
+  const link = ev.target.closest("a[href^='https://']");
+  if (!link || !tg?.openLink) return;
+  ev.preventDefault();
+  tg.openLink(link.href);
+});
+
+async function act(path, body, btn) {
+  const msg = $("#msg");
+  if (btn) btn.disabled = true;
+  try {
+    await call(path, body);
+    tg?.HapticFeedback?.notificationOccurred?.("success");
+    render();
+  } catch (err) {
+    if (msg) msg.textContent = errText(err);
+    tg?.HapticFeedback?.notificationOccurred?.("error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function header() {
+  const p = state.progress;
+  const name = state.user.name || state.user.alias;
+  return `
+    <h1>${name ? esc(name) : "Builder Badge Bot"}</h1>
+    <p class="muted">${p.earned}/${p.total} ${tr("badges").toLowerCase()} · ${p.percent}%</p>
+    <div class="bar"><i style="width:${p.percent}%"></i></div>
+    <p class="muted">${esc(p.tier)}</p>`;
+}
+
+function todayTab() {
+  if (!state.user.alias) {
+    return `<div class="card"><p>${tr("no_profile")}</p></div>` + profileCard() + `<p class="err" id="msg"></p>`;
+  }
+  const daily = state.routine.filter((r) => !r.weekly);
+  const weekly = state.routine.filter((r) => r.weekly);
+  const task = (r) => `
+    <div class="task">
+      <button class="check" data-done="${r.done ? 1 : 0}" data-task="${r.task}">${r.done ? "✓" : ""}</button>
+      <span class="grow">${r.icon} ${esc(r.label)}</span>
+      <a class="pill" href="${r.url}" target="_blank" rel="noopener">↗</a>
+    </div>`;
+  const streak = (s) => `
+    <div class="task">
+      <span class="grow">${s.icon} ${esc(s.label)}
+        <span class="pill">${s.streak} ${s.weekly ? tr("weeks") : tr("days")}${s.goal ? ` ${tr("of")} ${s.goal}` : " ✅"}</span>
+      </span>
+      ${s.adjustable ? `<button class="ghost" data-streak="${s.metric}">${tr("adjust")}</button>` : ""}
+    </div>`;
+  return `
+    ${header()}
+    <div class="card"><h2>${tr("routine")}</h2>${daily.map(task).join("")}</div>
+    <div class="card"><h2>${tr("weekly")}</h2>${weekly.map(task).join("")}</div>
+    <div class="card"><h2>${tr("streaks")}</h2>${state.streaks.map(streak).join("")}</div>
+    ${state.next.length ? `<div class="card"><h2>${tr("focus")}</h2>${state.next
+      .map((b) => `<p><b>${esc(b.name)}</b><br><span class="how muted">${esc(b.how)}</span> <a class="pill" href="${b.url}" target="_blank" rel="noopener">↗</a></p>`)
+      .join("")}</div>` : `<div class="card"><p>${tr("done_all")}</p></div>`}
+    <p class="muted"><i>${esc(state.motivation)}</i></p>
+    <div class="row">
+      <a class="btn grow" href="${state.links.home}" target="_blank" rel="noopener">${tr("open")}</a>
+      <button class="ghost" id="sync">${tr("sync")}</button>
+    </div>
+    <p class="err" id="msg"></p>`;
+}
+
+function badgesTab() {
+  const phases = [...new Set(state.badges.map((b) => b.phase))];
+  return header() + phases.map((phase) => {
+    const list = state.badges.filter((b) => b.phase === phase);
+    return `<div class="card"><h2>${esc(list[0].phase_name)}</h2>${list
+      .map((b) => `
+        <div class="badge ${b.earned ? "done" : ""}">
+          <span class="mark">${b.earned ? "✅" : "⬜"}</span>
+          <span class="grow"><span class="name">${esc(b.name)}</span>
+            ${b.earned ? "" : `<br><span class="how">${esc(b.how)}</span>`}</span>
+          ${b.earned ? "" : `<a class="pill" href="${b.url}" target="_blank" rel="noopener">↗</a>`}
+        </div>`)
+      .join("")}</div>`;
+  }).join("") + `
+    <div class="row">
+      <a class="btn grow ghost" href="${state.user.profile_url}" target="_blank" rel="noopener">${tr("view_profile")}</a>
+      <button id="sync">${tr("sync")}</button>
+    </div>
+    <p class="err" id="msg"></p>`;
+}
+
+function profileCard() {
+  return `
+    <div class="card">
+      <h2>${tr("profile_title")}</h2>
+      <div class="row">
+        <input id="alias" class="grow" placeholder="${tr("alias_ph")}" value="${esc(state.user.alias || "")}" />
+        <button id="save-alias">${tr("save")}</button>
+      </div>
+    </div>`;
+}
+
+function settingsTab() {
+  const langs = { es: "Español", en: "English" };
+  return `
+    ${profileCard()}
+    <div class="card">
+      <h2>${tr("time")}</h2>
+      <div class="row">
+        <input id="time" class="grow" type="time" value="${state.user.time}" />
+        <button id="save-time">${tr("save")}</button>
+      </div>
+      <h2>${tr("tz")}</h2>
+      <div class="row">
+        <input id="tz" class="grow" value="${esc(state.user.tz)}" />
+        <button id="save-tz">${tr("save")}</button>
+      </div>
+      <h2>${tr("lang")}</h2>
+      <div class="row">
+        ${Object.entries(langs).map(([code, label]) =>
+          `<button class="${code === state.lang ? "" : "ghost"} grow" data-lang="${code}">${label}</button>`).join("")}
+      </div>
+      <h2>${tr("reminders")}</h2>
+      <div class="row">
+        <span class="grow">${state.user.enabled ? tr("on") : tr("off")}</span>
+        <button class="ghost" id="toggle-enabled">${state.user.enabled ? tr("off") : tr("on")}</button>
+      </div>
+    </div>
+    <p class="err" id="msg"></p>`;
+}
+
+function render() {
+  const views = { today: todayTab, badges: badgesTab, settings: settingsTab };
+  $("#app").innerHTML = views[tab]();
+  $("#nav").className = "";
+  $("#nav").innerHTML = ["today", "badges", "settings"]
+    .map((k) => `<button data-tab="${k}" class="${k === tab ? "on" : ""}">${tr(k)}</button>`)
+    .join("");
+  bind();
+}
+
+function bind() {
+  document.querySelectorAll("[data-tab]").forEach((el) =>
+    el.onclick = () => { tab = el.dataset.tab; render(); });
+
+  document.querySelectorAll("[data-task]").forEach((el) =>
+    el.onclick = () => act("/api/checkin", { task: el.dataset.task, done: el.dataset.done !== "1" }, el));
+
+  document.querySelectorAll("[data-streak]").forEach((el) =>
+    el.onclick = () => {
+      const current = state.streaks.find((s) => s.metric === el.dataset.streak);
+      const answer = prompt(`${tr("set_streak")} (${esc(current.label)})`, current.streak);
+      if (answer === null) return;
+      // Sin esto, un texto cualquiera se enviaba como 0 y borraba la racha en silencio.
+      if (!/^\d+$/.test(answer.trim())) {
+        const msg = $("#msg");
+        if (msg) msg.textContent = tr("bad_number");
+        return;
+      }
+      act("/api/streak", { metric: el.dataset.streak, days: parseInt(answer, 10) }, el);
+    });
+
+  document.querySelectorAll("[data-lang]").forEach((el) =>
+    el.onclick = () => act("/api/settings", { lang: el.dataset.lang }, el));
+
+  const on = (id, fn) => { const el = $(id); if (el) el.onclick = () => fn(el); };
+  on("#sync", (el) => act("/api/sync", {}, el));
+  on("#save-alias", (el) => act("/api/profile", { alias: $("#alias").value }, el));
+  on("#save-time", (el) => {
+    const [hour, minute] = ($("#time").value || "09:00").split(":").map(Number);
+    act("/api/settings", { hour, minute }, el);
+  });
+  on("#save-tz", (el) => act("/api/settings", { tz: $("#tz").value.trim() }, el));
+  on("#toggle-enabled", (el) => act("/api/settings", { enabled: !state.user.enabled }, el));
+}
+
+(async () => {
+  tg?.ready();
+  tg?.expand();
+  try {
+    await call("/api/state");
+    render();
+  } catch (err) {
+    $("#boot").textContent = err.message === "401" || err.code ? "Abre esta página desde el bot en Telegram." : "Error";
+  }
+})();
+</script>
+</body>
+</html>

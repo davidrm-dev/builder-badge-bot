@@ -57,7 +57,11 @@ def hhmm(user: User) -> str:
 
 
 def sync_badges(store, uid: int, notify_new: bool = True) -> tuple[list[str], int, list[int]]:
-    """Trae las badges desde la API y devuelve (nuevas, total, tiers nuevos)."""
+    """Trae las badges desde la API y devuelve (nuevas, total, tiers nuevos).
+
+    La API es la fuente de verdad: lo que ya no está en la respuesta se borra, para que un
+    perfil anterior (o una badge revocada) no infle el conteo.
+    """
     user = store.get_user(uid)
     if not user or not user.bp_id:
         return [], 0, []
@@ -75,7 +79,11 @@ def sync_badges(store, uid: int, notify_new: bool = True) -> tuple[list[str], in
             badge.display_name,
             badge.awarded_epoch,
         )
+    stale = known - {b.badge_id for b in awarded}
+    if stale:
+        store.delete_badges(uid, stale)
     total = store.badge_count(uid)
+    store.prune_tiers(uid, total)
     tiers = store.pending_tiers(uid, total, list(cat.TIER_VALUES))
     if not notify_new:
         return [], total, []

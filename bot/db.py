@@ -44,6 +44,12 @@ CREATE TABLE IF NOT EXISTS tiers (
     tier    INTEGER NOT NULL,
     PRIMARY KEY (chat_id, tier)
 );
+CREATE TABLE IF NOT EXISTS pep_talks (
+    chat_id INTEGER NOT NULL,
+    day     TEXT NOT NULL,
+    text    TEXT NOT NULL,
+    PRIMARY KEY (chat_id, day)
+);
 """
 
 
@@ -148,11 +154,38 @@ class Store:
         row = self._conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
         return self._to_user(row) if row else None
 
+    def chat_ids_for_profile(self, bp_id: str) -> set[int]:
+        rows = self._conn.execute("SELECT chat_id FROM users WHERE bp_id = ?", (bp_id,))
+        return {int(r["chat_id"]) for r in rows}
+
     def set_profile(self, chat_id: int, alias: str, bp_id: str, name: str) -> None:
-        self.ensure_user(chat_id)
+        previous = self.ensure_user(chat_id)
         self._conn.execute(
             "UPDATE users SET alias = ?, bp_id = ?, name = ? WHERE chat_id = ?",
             (alias, bp_id, name, chat_id),
+        )
+        self._conn.commit()
+        if previous.bp_id and previous.bp_id != bp_id:
+            # Las badges y los hitos son del perfil anterior: si no se borran, el panel suma
+            # las de los dos perfiles.
+            self.clear_badges(chat_id)
+
+    # ---------------- mensaje generado del día ----------------
+    def get_pep_talk(self, chat_id: int, day: date) -> str | None:
+        row = self._conn.execute(
+            "SELECT text FROM pep_talks WHERE chat_id = ? AND day = ?",
+            (chat_id, day.isoformat()),
+        ).fetchone()
+        return row["text"] if row else None
+
+    def save_pep_talk(self, chat_id: int, day: date, text: str) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO pep_talks (chat_id, day, text) VALUES (?, ?, ?)",
+            (chat_id, day.isoformat(), text),
+        )
+        self._conn.execute(
+            "DELETE FROM pep_talks WHERE chat_id = ? AND day < ?",
+            (chat_id, (day - timedelta(days=7)).isoformat()),
         )
         self._conn.commit()
 
@@ -221,6 +254,23 @@ class Store:
         )
         self._conn.commit()
 
+    def delete_badges(self, chat_id: int, badge_ids: set[str]) -> None:
+        for badge_id in badge_ids:
+            self._conn.execute(
+                "DELETE FROM badges WHERE chat_id = ? AND badge_id = ?", (chat_id, badge_id)
+            )
+        self._conn.commit()
+
+    def clear_badges(self, chat_id: int) -> None:
+        self._conn.execute("DELETE FROM badges WHERE chat_id = ?", (chat_id,))
+        self._conn.execute("DELETE FROM tiers WHERE chat_id = ?", (chat_id,))
+        self._conn.commit()
+
+    def prune_tiers(self, chat_id: int, count: int) -> None:
+        """Olvida los hitos por encima del total actual para que se vuelvan a anunciar."""
+        self._conn.execute("DELETE FROM tiers WHERE chat_id = ? AND tier > ?", (chat_id, count))
+        self._conn.commit()
+
     def badge_count(self, chat_id: int) -> int:
         row = self._conn.execute(
             "SELECT COUNT(*) AS n FROM badges WHERE chat_id = ?", (chat_id,)
@@ -268,17 +318,18 @@ class Store:
     def set_streak(self, chat_id: int, task: str, days: int, today: date) -> None:
         """Ajusta la racha de `task` a `days` días rellenando hacia atrás con check-ins sintéticos.
 
-        - Borra los check-ins sintéticos anteriores a hoy para esa tarea (limpia ajuste previo).
-        - Inserta check-ins sintéticos en los (days - 1) días anteriores a hoy que falten.
+        - Borra los check-ins sintéticos de hoy hacia atrás (limpia un ajuste previo).
+        - Inserta check-ins sintéticos en los `days` días que terminan hoy, incluido hoy: la
+          racha declarada cuenta el día actual, y sin él la cadena se rompe mañana.
         - No toca los check-ins reales (synthetic=0) del usuario.
         """
-        # 1. Borrar sintéticos pasados para empezar limpio
+        # 1. Borrar sintéticos previos para empezar limpio
         self._conn.execute(
-            "DELETE FROM checkins WHERE chat_id = ? AND task = ? AND day < ? AND synthetic = 1",
+            "DELETE FROM checkins WHERE chat_id = ? AND task = ? AND day <= ? AND synthetic = 1",
             (chat_id, task, today.isoformat()),
         )
         # 2. Insertar sintéticos para los días que falten
-        for offset in range(1, days):
+        for offset in range(days):
             day = today - timedelta(days=offset)
             self._conn.execute(
                 "INSERT OR IGNORE INTO checkins (chat_id, day, task, synthetic) VALUES (?, ?, ?, 1)",
@@ -287,9 +338,9 @@ class Store:
         self._conn.commit()
 
     def reset_streak(self, chat_id: int, task: str, today: date) -> None:
-        """Reinicia la racha borrando todos los check-ins sintéticos anteriores a hoy."""
+        """Reinicia la racha borrando todos los check-ins sintéticos de hoy hacia atrás."""
         self._conn.execute(
-            "DELETE FROM checkins WHERE chat_id = ? AND task = ? AND day < ? AND synthetic = 1",
+            "DELETE FROM checkins WHERE chat_id = ? AND task = ? AND day <= ? AND synthetic = 1",
             (chat_id, task, today.isoformat()),
         )
         self._conn.commit()

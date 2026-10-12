@@ -8,6 +8,7 @@ Diseño de la tabla (PK/SK):
     U#<chat_id> | CHK#<YYYY-MM-DD>#<task>  → check-in manual (con TTL)
     U#<chat_id> | TIER#<n>                 → hito de recompensa ya anunciado
     E#<email>   | EMAIL                    → índice correo → chat_id (canal de correo)
+    U#<chat_id> | PEP#<YYYY-MM-DD>         → mensaje del día generado con Bedrock (con TTL)
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from boto3.dynamodb.conditions import Attr, Key
 from .db import User, new_email_user_id
 
 CHECKIN_TTL_DAYS = 400
+PEP_TTL_DAYS = 7
 
 
 def _pk(chat_id: int) -> str:
@@ -135,8 +137,34 @@ class DynamoStore:
             ExpressionAttributeValues={f":{k}": v for k, v in values.items()},
         )
 
+    def chat_ids_for_profile(self, bp_id: str) -> set[int]:
+        return {u.chat_id for u in self.all_users() if u.bp_id == bp_id}
+
     def set_profile(self, chat_id: int, alias: str, bp_id: str, name: str) -> None:
+        previous = self.ensure_user(chat_id)
         self._update_profile(chat_id, {"alias": alias, "bp_id": bp_id, "name": name})
+        if previous.bp_id and previous.bp_id != bp_id:
+            # Las badges y los hitos son del perfil anterior: si no se borran, el panel suma
+            # las de los dos perfiles.
+            self.clear_badges(chat_id)
+
+    # ---------------- mensaje generado del día ----------------
+    def get_pep_talk(self, chat_id: int, day: date) -> str | None:
+        item = self.table.get_item(
+            Key={"pk": _pk(chat_id), "sk": f"PEP#{day.isoformat()}"}
+        ).get("Item")
+        return item.get("text") if item else None
+
+    def save_pep_talk(self, chat_id: int, day: date, text: str) -> None:
+        ttl = int((datetime.now(timezone.utc) + timedelta(days=PEP_TTL_DAYS)).timestamp())
+        self.table.put_item(
+            Item={
+                "pk": _pk(chat_id),
+                "sk": f"PEP#{day.isoformat()}",
+                "text": text,
+                "ttl": ttl,
+            }
+        )
 
     def set_schedule(self, chat_id: int, hour: int, minute: int) -> None:
         self._update_profile(chat_id, {"hour": hour, "minute": minute, "enabled": True})
@@ -197,6 +225,21 @@ class DynamoStore:
             }
         )
 
+    def delete_badges(self, chat_id: int, badge_ids: set[str]) -> None:
+        for badge_id in badge_ids:
+            self.table.delete_item(Key={"pk": _pk(chat_id), "sk": f"BADGE#{badge_id}"})
+
+    def clear_badges(self, chat_id: int) -> None:
+        for prefix in ("BADGE#", "TIER#"):
+            for item in self._items(chat_id, prefix):
+                self.table.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
+
+    def prune_tiers(self, chat_id: int, count: int) -> None:
+        """Olvida los hitos por encima del total actual para que se vuelvan a anunciar."""
+        for item in self._items(chat_id, "TIER#"):
+            if int(item["sk"].split("#", 1)[1]) > count:
+                self.table.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
+
     def badge_count(self, chat_id: int) -> int:
         return len(self._items(chat_id, "BADGE#"))
 
@@ -242,23 +285,15 @@ class DynamoStore:
     def set_streak(self, chat_id: int, task: str, days: int, today: date) -> None:
         """Ajusta la racha de `task` a `days` días rellenando hacia atrás con check-ins sintéticos.
 
-        - Borra los sintéticos anteriores a hoy para limpiar un ajuste previo.
-        - Inserta sintéticos para los (days - 1) días anteriores que falten.
+        - Borra los sintéticos de hoy hacia atrás para limpiar un ajuste previo.
+        - Inserta sintéticos para los `days` días que terminan hoy, incluido hoy: la racha
+          declarada cuenta el día actual, y sin él la cadena se rompe mañana.
         - No toca check-ins reales (synthetic=False).
         """
-        # 1. Borrar sintéticos pasados
-        past_synth = [
-            i for i in self._items(chat_id, "CHK#")
-            if i["task"] == task
-            and i.get("synthetic")
-            and i["day"] < today.isoformat()
-        ]
-        for item in past_synth:
-            self.table.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
+        self._delete_synthetics(chat_id, task, today)
 
-        # 2. Insertar sintéticos faltantes
         ttl = int((datetime.now(timezone.utc) + timedelta(days=CHECKIN_TTL_DAYS)).timestamp())
-        for offset in range(1, days):
+        for offset in range(days):
             day = today - timedelta(days=offset)
             sk = f"CHK#{day.isoformat()}#{task}"
             try:
@@ -278,14 +313,15 @@ class DynamoStore:
                 pass  # ya existe un check-in real para ese día — perfecto, no hace falta el sintético
 
     def reset_streak(self, chat_id: int, task: str, today: date) -> None:
-        """Reinicia la racha borrando todos los check-ins sintéticos anteriores a hoy."""
-        past_synth = [
+        """Reinicia la racha borrando todos los check-ins sintéticos de hoy hacia atrás."""
+        self._delete_synthetics(chat_id, task, today)
+
+    def _delete_synthetics(self, chat_id: int, task: str, until: date) -> None:
+        synthetic = [
             i for i in self._items(chat_id, "CHK#")
-            if i["task"] == task
-            and i.get("synthetic")
-            and i["day"] < today.isoformat()
+            if i["task"] == task and i.get("synthetic") and i["day"] <= until.isoformat()
         ]
-        for item in past_synth:
+        for item in synthetic:
             self.table.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
 
     def daily_streak(self, chat_id: int, task: str, today: date) -> int:

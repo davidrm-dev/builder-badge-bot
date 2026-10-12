@@ -241,8 +241,18 @@ def test_finished_user_gets_final_email_and_is_paused(env, monkeypatch):
     user = _active_user(env)
     from bot import badges as cat
 
-    for i, badge in enumerate(cat.CATALOG):
-        store.save_badge(user.chat_id, f"id-{i}", badge.key, badge.name, None)
+    # La API es la fuente de verdad del sync: las 21 tienen que venir de ahí.
+    awarded = [
+        api.AwardedBadge(
+            badge_id=f"id-{i}",
+            display_name=badge.name,
+            description="",
+            category="",
+            awarded_epoch=None,
+        )
+        for i, badge in enumerate(cat.CATALOG)
+    ]
+    monkeypatch.setattr(api, "get_awarded_badges", lambda bp_id: awarded)
     mail.send_daily(store, user, BASE)
     assert "21" in outbox[-1][1].subject
     assert not store.get_user(user.chat_id).enabled
