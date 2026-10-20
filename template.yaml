@@ -47,7 +47,7 @@ Parameters:
   ScheduleWindowMinutes:
     Type: Number
     Default: 15
-    Description: Cada cuántos minutos corre el scheduler (debe coincidir con el cron).
+    Description: Cada cuántos minutos corre el scheduler, en punto (debe dividir 60).
   AlertEmail:
     Type: String
     Default: ""
@@ -219,7 +219,9 @@ Resources:
           Type: ScheduleV2
           Properties:
             Name: !Sub "${AWS::StackName}-tick"
-            ScheduleExpression: !Sub "rate(${ScheduleWindowMinutes} minutes)"
+            # En punto (:00, :15, :30, :45): quien elige una hora redonda la recibe a esa hora.
+            # rate() quedaba anclado al minuto en que se creó el stack (:14, :29...).
+            ScheduleExpression: !Sub "cron(0/${ScheduleWindowMinutes} * * * ? *)"
             Description: Revisa quién tiene recordatorio pendiente en su hora local.
 
   AlertTopic:

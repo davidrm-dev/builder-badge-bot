@@ -107,7 +107,7 @@ de SQLite y los recordatorios los dispara EventBridge Scheduler en vez del job q
 Telegram ──webhook──▶ Lambda Function URL (bot.lambda_webhook)
                           │
 EventBridge Scheduler ─▶ Lambda (bot.lambda_scheduler) ──▶ DynamoDB  ──▶ api.builder.aws.com
-                          (cada 15 min, filtra por hora local) ──▶ Telegram / Amazon SES
+                          (:00 :15 :30 :45, filtra por hora local) ──▶ Telegram / Amazon SES
 Navegador ──────────────▶ Lambda Function URL (bot.web): inscripción, check-ins, ajustes
 ```
 
