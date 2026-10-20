@@ -23,6 +23,7 @@ from . import badges as cat
 from . import builder_api as api
 from . import coach, core
 from . import email_channel as mail
+from . import privacy
 from .config import public_base_url
 from .db import User
 from .i18n import LANG_NAMES, LANGS, normalize, t
@@ -111,7 +112,8 @@ def signup_form(lang: str, values: dict[str, str] | None = None, error: str | No
   <input id="tz" name="tz" type="hidden" value="{html.escape(v.get("tz", core.DEFAULT_TZ))}">
   <input class="hp" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
   <button type="submit">{t(lang, "web_submit")}</button>
-  <p class="muted">{html.escape(t(lang, "web_privacy"))}</p>
+  <p class="muted">{html.escape(t(lang, "web_privacy"))}
+    <a href="{privacy.PATHS[0] if lang == "es" else privacy.PATHS[1]}">{html.escape(t(lang, "privacy_link"))}</a></p>
 </form>
 <script>try{{document.getElementById('tz').value=Intl.DateTimeFormat().resolvedOptions().timeZone||document.getElementById('tz').value}}catch(e){{}}</script>
 """
@@ -327,6 +329,9 @@ def route(method: str, path: str, params: dict[str, str], headers: dict[str, str
     path = "/" + path.strip("/")
     if path == "/" and method == "GET":
         return 200, signup_form(lang)
+    if path in privacy.PATHS:
+        plang = params.get("lang") or ("es" if path == privacy.PATHS[0] else "en")
+        return 200, page(plang, card(privacy.body_html(plang)), privacy.title(plang))
     if path == "/signup" and method == "POST":
         return do_signup(store, params, base)
     if path == "/confirm":

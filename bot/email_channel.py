@@ -20,6 +20,7 @@ from datetime import date
 
 from . import badges as cat
 from . import builder_api as api
+from . import privacy
 from . import coach, core
 from .config import email_from, link_secret
 from .db import User
@@ -142,9 +143,13 @@ def _footer(user: User, base: str, lang: str) -> tuple[str, str]:
     html_part = (
         f"{html.escape(note)}<br>"
         f'<a href="{html.escape(me)}" style="color:#6b7280">{html.escape(t(lang, "web_settings"))}</a> · '
-        f'<a href="{html.escape(unsub)}" style="color:#6b7280">{html.escape(t(lang, "email_unsubscribe"))}</a>'
+        f'<a href="{html.escape(unsub)}" style="color:#6b7280">{html.escape(t(lang, "email_unsubscribe"))}</a> · '
+        f'<a href="{html.escape(privacy.url(base, lang))}" style="color:#6b7280">{html.escape(t(lang, "privacy_link"))}</a>'
     )
-    text_part = f"{note}\n{t(lang, 'web_settings')}: {me}\n{t(lang, 'email_unsubscribe')}: {unsub}"
+    text_part = (
+        f"{note}\n{t(lang, 'web_settings')}: {me}\n{t(lang, 'email_unsubscribe')}: {unsub}\n"
+        f"{t(lang, 'privacy_link')}: {privacy.url(base, lang)}"
+    )
     return html_part, text_part
 
 

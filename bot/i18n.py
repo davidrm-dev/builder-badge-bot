@@ -34,7 +34,8 @@ STRINGS: dict[str, dict[str, str]] = {
             "/zona `Area/Ciudad` – zona horaria (ej. /zona America/Bogota)\n"
             "/idioma – español o inglés\n"
             "/pausar · /activar – recordatorios off/on\n"
-            "/borrar – elimina tus datos\n\n"
+            "/borrar – elimina tus datos\n"
+            "/privacidad – qué datos guardo\n\n"
             "_AWS solo publica las badges ya ganadas, no el avance interno de cada racha. "
             "Por eso tú marcas los botones \"hecho\" y yo confirmo cada badge contra la API pública._"
         ),
@@ -167,7 +168,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "web_time": "¿A qué hora te escribo?",
         "web_lang": "Idioma",
         "web_submit": "Inscribirme",
-        "web_privacy": "Solo guardo tu correo, tu alias y tus check-ins. Te das de baja con un clic.",
+        "web_privacy": "Guardo lo mínimo: tu correo, tu alias, tu horario y tus check-ins. Te das de baja con un clic.",
+        "privacy_link": "Aviso de privacidad",
         "web_err_email": "Ese correo no parece válido.",
         "web_err_alias": "No encontré el perfil @{alias} en Builder Center.",
         "web_err_time": "Elige una hora válida.",
@@ -217,7 +219,8 @@ STRINGS: dict[str, dict[str, str]] = {
             "/timezone `Area/City` – time zone (e.g. /timezone America/Bogota)\n"
             "/language – Spanish or English\n"
             "/pause · /resume – reminders off/on\n"
-            "/delete – wipe your data\n\n"
+            "/delete – wipe your data\n"
+            "/privacy – what data I keep\n\n"
             "_AWS only publishes badges you already earned, not the progress inside each streak. "
             "That's why you tap the \"done\" buttons and I confirm every badge against the public API._"
         ),
@@ -350,7 +353,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "web_time": "When should I write to you?",
         "web_lang": "Language",
         "web_submit": "Sign me up",
-        "web_privacy": "I only store your email, your alias and your check-ins. Unsubscribe in one click.",
+        "web_privacy": "I keep the minimum: your email, alias, schedule and check-ins. Unsubscribe in one click.",
+        "privacy_link": "Privacy notice",
         "web_err_email": "That email doesn't look valid.",
         "web_err_alias": "I couldn't find the profile @{alias} on Builder Center.",
         "web_err_time": "Pick a valid time.",

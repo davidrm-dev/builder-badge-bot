@@ -17,6 +17,7 @@ COMMANDS = {
         ("pausar", "Pausar recordatorios"),
         ("activar", "Reanudar recordatorios"),
         ("ayuda", "Guía rápida"),
+        ("privacidad", "Qué datos guardo"),
     ],
     "en": [
         ("today", "Today's mission"),
@@ -30,6 +31,7 @@ COMMANDS = {
         ("pause", "Pause reminders"),
         ("resume", "Resume reminders"),
         ("help", "Quick guide"),
+        ("privacy", "What data I keep"),
     ],
 }
 

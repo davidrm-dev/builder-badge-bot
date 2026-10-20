@@ -40,6 +40,16 @@ Parameters:
     NoEcho: true
     MinLength: 32
     Description: Clave para firmar los enlaces de los correos (openssl rand -hex 32).
+  PrivacyContact:
+    Type: String
+    Default: ""
+    Description: Correo de contacto que aparece en el aviso de privacidad (vacío = no se muestra).
+  CustomDomain:
+    Type: String
+    Default: ""
+    Description: >-
+      Subdominio propio para las páginas de correo (ej. coach.davidrmdev.com). Crea un
+      certificado ACM y una distribución CloudFront delante de la Lambda web. Vacío = no.
   PublicBaseUrl:
     Type: String
     Default: ""
@@ -56,6 +66,7 @@ Parameters:
 Conditions:
   HasAlerts: !Not [!Equals [!Ref AlertEmail, ""]]
   HasPublicBaseUrl: !Not [!Equals [!Ref PublicBaseUrl, ""]]
+  HasCustomDomain: !Not [!Equals [!Ref CustomDomain, ""]]
 
 Globals:
   Function:
@@ -73,6 +84,7 @@ Globals:
         SES_CONFIGURATION_SET: !Ref EmailConfigSet
         MINIAPP_URL: !Ref MiniAppUrl
         BEDROCK_MODEL_ID: !Ref BedrockModelId
+        PRIVACY_CONTACT: !Ref PrivacyContact
 
 Resources:
   Table:
@@ -118,7 +130,10 @@ Resources:
       Handler: bot.web.handler
       Environment:
         Variables:
-          PUBLIC_BASE_URL: !Ref PublicBaseUrl
+          PUBLIC_BASE_URL: !If
+            - HasCustomDomain
+            - !Sub "https://${CustomDomain}"
+            - !Ref PublicBaseUrl
       FunctionUrlConfig:
         AuthType: NONE
       Policies:
@@ -144,6 +159,48 @@ Resources:
                 StringLike:
                   ses:FromAddress: !Sub "*@${EmailDomain}"
 
+  # ---------------- dominio propio (opcional) ----------------
+  # El certificado se valida por DNS: mientras se crea, el stack queda esperando hasta que el
+  # CNAME de validación exista en el DNS del dominio (sale en los eventos del stack).
+  WebCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Condition: HasCustomDomain
+    Properties:
+      DomainName: !Ref CustomDomain
+      ValidationMethod: DNS
+
+  WebDistribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: HasCustomDomain
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "${AWS::StackName} paginas de correo"
+        Aliases: [!Ref CustomDomain]
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          AcmCertificateArn: !Ref WebCertificate
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        Origins:
+          - Id: web
+            # La Function URL viene como https://<id>.lambda-url.<region>.on.aws/
+            DomainName: !Select [2, !Split ["/", !GetAtt WebFunctionUrl.FunctionUrl]]
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+        DefaultCacheBehavior:
+          TargetOriginId: web
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          # Páginas dinámicas con enlaces firmados: nada se cachea.
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # Managed-CachingDisabled
+          # Reenvía query, cuerpo y headers salvo Host (la Function URL exige su propio Host).
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac  # Managed-AllViewerExceptHostHeader
+
   WebhookFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -152,6 +209,11 @@ Resources:
       Environment:
         Variables:
           WEBHOOK_SECRET: !Ref WebhookSecret
+          # Para enlazar el aviso de privacidad desde /privacidad.
+          PUBLIC_BASE_URL: !If
+            - HasCustomDomain
+            - !Sub "https://${CustomDomain}"
+            - !If [HasPublicBaseUrl, !Ref PublicBaseUrl, !GetAtt WebFunctionUrl.FunctionUrl]
       FunctionUrlConfig:
         AuthType: NONE
       Policies:
@@ -182,7 +244,10 @@ Resources:
       Environment:
         Variables:
           SCHEDULE_WINDOW_MINUTES: !Ref ScheduleWindowMinutes
-          PUBLIC_BASE_URL: !If [HasPublicBaseUrl, !Ref PublicBaseUrl, !GetAtt WebFunctionUrl.FunctionUrl]
+          PUBLIC_BASE_URL: !If
+            - HasCustomDomain
+            - !Sub "https://${CustomDomain}"
+            - !If [HasPublicBaseUrl, !Ref PublicBaseUrl, !GetAtt WebFunctionUrl.FunctionUrl]
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref Table
@@ -277,7 +342,10 @@ Outputs:
     Value: !GetAtt WebhookFunctionUrl.FunctionUrl
   SignupUrl:
     Description: Página de inscripción por correo (compártela con los builders).
-    Value: !If [HasPublicBaseUrl, !Ref PublicBaseUrl, !GetAtt WebFunctionUrl.FunctionUrl]
+    Value: !If
+      - HasCustomDomain
+      - !Sub "https://${CustomDomain}"
+      - !If [HasPublicBaseUrl, !Ref PublicBaseUrl, !GetAtt WebFunctionUrl.FunctionUrl]
   DkimRecords:
     Description: 3 registros CNAME que hay que crear en el DNS del dominio para que SES lo verifique.
     Value: !Join
@@ -285,5 +353,9 @@ Outputs:
       - - !Join [" CNAME ", [!GetAtt EmailIdentity.DkimDNSTokenName1, !GetAtt EmailIdentity.DkimDNSTokenValue1]]
         - !Join [" CNAME ", [!GetAtt EmailIdentity.DkimDNSTokenName2, !GetAtt EmailIdentity.DkimDNSTokenValue2]]
         - !Join [" CNAME ", [!GetAtt EmailIdentity.DkimDNSTokenName3, !GetAtt EmailIdentity.DkimDNSTokenValue3]]
+  CustomDomainTarget:
+    Condition: HasCustomDomain
+    Description: Crea en el DNS un CNAME del subdominio apuntando aquí.
+    Value: !GetAtt WebDistribution.DomainName
   TableName:
     Value: !Ref Table

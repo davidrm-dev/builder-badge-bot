@@ -72,8 +72,35 @@ desde el correo y recibe cada día la misión (≤5 líneas) con botones de chec
 2. Recomendado: un TXT de DMARC, `_dmarc.davidrmdev.com` → `v=DMARC1; p=none;`.
 3. SES arranca en *sandbox*: solo envía a direcciones verificadas (sirve para probar con la tuya).
    Para abrirlo a todos, pide acceso de producción en la consola de SES → *Account dashboard*.
-4. Comparte el `SignupUrl` del output. Si quieres algo como `coach.davidrmdev.com`, ponlo delante
-   con CloudFront y pásalo en `PublicBaseUrl`.
+4. Comparte el `SignupUrl` del output.
+
+### Dominio propio para las páginas (opcional)
+
+Con `CustomDomain=coach.davidrmdev.com` el stack crea un certificado ACM y una distribución
+CloudFront delante de la Lambda web, y todos los enlaces de los correos pasan a usar ese dominio.
+
+1. Despliega con `CustomDomain=...`. El stack se queda esperando en `WebCertificate`: en los eventos
+   del stack (consola de CloudFormation → *Events*) aparece el CNAME de validación de ACM.
+   Créalo en el DNS del dominio; ACM lo valida en unos minutos y el despliegue sigue solo.
+2. Al terminar, crea un CNAME `coach` → el valor del output `CustomDomainTarget` (`dxxxx.cloudfront.net`).
+
+El usuario de despliegue necesita los bloques `CertificadoDelDominio` y `CloudFrontDelDominio` de
+[`docs/deploy-policy.json`](docs/deploy-policy.json).
+
+## Privacidad
+
+El aviso vive en [`bot/privacy.py`](bot/privacy.py) y se sirve en `/privacidad` y `/privacy`; el
+formulario, el pie de cada correo y el comando `/privacidad` de Telegram enlazan ahí. Si cambias qué
+se guarda o con quién se comparte, actualiza ese texto en el mismo commit. `PrivacyContact` agrega un
+correo de contacto. Los logs de las Lambdas se guardan 30 días:
+
+```bash
+for f in Webhook Scheduler Web; do
+  n=$(aws cloudformation describe-stack-resource --stack-name builder-badge-bot \
+    --logical-resource-id ${f}Function --query StackResourceDetail.PhysicalResourceId --output text)
+  aws logs put-retention-policy --log-group-name /aws/lambda/$n --retention-in-days 30
+done
+```
 
 Si el dominio ya está verificado en SES en esa región, bórralo de la consola antes de desplegar
 (CloudFormation no puede adoptar una identidad existente).

@@ -21,8 +21,9 @@ from telegram.ext import (
 
 from . import badges as cat
 from . import builder_api as api
-from . import coach, core
+from . import coach, core, privacy
 from .commands import register_commands
+from .config import public_base_url
 from .core import hhmm, today_for, user_tz, valid_tz
 from .db import User
 from .i18n import LANG_NAMES, LANGS, normalize, t
@@ -508,6 +509,17 @@ async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
 
 
+async def cmd_privacy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    lang = lang_of(update.effective_chat.id)
+    base = public_base_url()
+    markup = (
+        InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "privacy_link"), url=privacy.url(base, lang))]])
+        if base
+        else None
+    )
+    await update.message.reply_text(privacy.summary(lang), parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
+
+
 async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     lang = lang_of(chat_id)
@@ -699,6 +711,7 @@ def build_app(token: str, *, with_jobs: bool = True) -> Application:
     app.add_handler(CommandHandler(["pausar", "pause"], cmd_pause))
     app.add_handler(CommandHandler(["activar", "resume"], cmd_resume))
     app.add_handler(CommandHandler(["borrar", "delete"], cmd_delete))
+    app.add_handler(CommandHandler(["privacidad", "privacy"], cmd_privacy))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_error_handler(on_error)
