@@ -61,7 +61,7 @@ def fake_context(*args: str) -> SimpleNamespace:
         (botmain.cmd_profile, ("davidrm",), "Conectado"),
         (botmain.cmd_time, ("07:15",), "07:15"),
         (botmain.cmd_badges, (), "1/21"),
-        (botmain.cmd_today, (), "Misión del día"),
+        (botmain.cmd_today, (), "Hoy · 1/21"),
         (botmain.cmd_sync, (), "Sin novedades"),
         (botmain.cmd_streak, (), "rachas"),
         (botmain.cmd_tz, ("America/Bogota",), "America/Bogota"),
@@ -104,7 +104,7 @@ async def test_language_switches_all_messages(env):
 
     reply.reset_mock()
     await botmain.cmd_today(update, fake_context())
-    assert "Today's mission" in reply.await_args.args[0]
+    assert "Today · 1/21" in reply.await_args.args[0]
 
     reply.reset_mock()
     await botmain.cmd_help(update, fake_context())
@@ -128,6 +128,8 @@ async def test_daily_keyboard_links_to_builder_center(env):
     markup = reply.await_args.kwargs["reply_markup"]
     urls = [b.url for row in markup.inline_keyboard for b in row if b.url]
     assert "https://builder.aws.com/" in urls
+    assert "https://builder.aws.com/profile" in urls  # foco: Photo Finisher → Edit profile
+    assert "https://builder.aws.com/profile?tab=badges#activity" in urls
 
 
 @pytest.mark.asyncio

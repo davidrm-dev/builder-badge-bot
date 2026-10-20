@@ -34,7 +34,8 @@ STRINGS: dict[str, dict[str, str]] = {
             "/zona `Area/Ciudad` – zona horaria (ej. /zona America/Bogota)\n"
             "/idioma – español o inglés\n"
             "/pausar · /activar – recordatorios off/on\n"
-            "/borrar – elimina tus datos\n\n"
+            "/borrar – elimina tus datos\n"
+            "/privacidad – qué datos guardo\n\n"
             "_AWS solo publica las badges ya ganadas, no el avance interno de cada racha. "
             "Por eso tú marcas los botones \"hecho\" y yo confirmo cada badge contra la API pública._"
         ),
@@ -45,6 +46,10 @@ STRINGS: dict[str, dict[str, str]] = {
             "Revisa el alias en la URL de tu perfil: builder.aws.com/community/@*tualias*"
         ),
         "api_down": "Builder Center no respondió ({error}). Intentemos de nuevo en un rato.",
+        "profile_limit": (
+            "🔒 El perfil `{alias}` ya lo siguen {max} cuentas de Telegram, que es el máximo.\n"
+            "Si es tu perfil, usa /borrar en la cuenta que ya no uses y vuelve a conectarlo aquí."
+        ),
         "profile_ok": (
             "✅ *Conectado:* {name} (@{alias})\n"
             "🏅 Badges detectadas: *{total}/{max}*  `{bar}`\n"
@@ -74,13 +79,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "streaks_title": "*🔥 Tus rachas*",
         "streaks_none": "Ya tienes todas las badges de racha. 🔥",
         "streaks_hint": "_Yo cuento lo que marcas en /hoy; AWS solo confirma la badge al final._",
-        "daily_title": "☀️ *Misión del día · Builder Center*",
-        "daily_routine": "*Rutina diaria · 10 min*",
-        "daily_focus": "*🎯 Foco de hoy*",
-        "daily_weekly": "*📅 Pendientes de la semana*",
-        "daily_streaks": "*🔥 Rachas activas*",
-        "daily_streaks_hint": "_Toca el botón de la rutina cada día para acumular racha:_",
-        "daily_footer": "Marca lo que vayas haciendo 👇",
+        "daily_title": "☀️ *Hoy · {total}/{max}*  `{bar}`",
+        "daily_routine": "🔑 Entra · 📖 Lee 1 · ❤️ Like · 💬 Comenta",
+        "daily_routine_done": "✅ Rutina de hoy completa",
+        "daily_focus": "🎯 *{badge}*: {how}",
+        "daily_streak": "🔥 {label} · racha *{streak}/{goal}* días",
+        "daily_weekly": "📅 Esta semana: {tasks}",
         "progress": "Progreso: *{total}/{max}*  `{bar}`",
         "tier_next": "Te faltan *{missing}* para: {reward}",
         "tier_done": "🏆 ¡Tienes las 21! Reclama tu recompensa en Builder Center.",
@@ -94,15 +98,17 @@ STRINGS: dict[str, dict[str, str]] = {
             "alguien más necesita leer cómo lo hiciste.\n\n"
             "Si ya no quieres recordatorios: /pausar"
         ),
+        "btn_app": "🚀 Abrir mi panel",
         "btn_open": "🌐 Abrir Builder Center",
         "btn_read": "📖 Leer",
         "btn_write": "✍️ Escribir",
         "btn_wishlist": "💡 Wishlist",
         "btn_profile": "👤 Mi perfil",
         "btn_rewards": "🎁 Recompensas",
-        "btn_settings": "⚙️ Editar perfil",
         "btn_sync": "🔄 Revisar badges",
         "btn_today": "☀️ Misión de hoy",
+        "btn_focus": "🎯 {badge}",
+        "btn_progress": "📊 Mi avance exacto",
         "btn_go": "👉 Ir a {what}",
         "cb_done": "¡Hecho! ✅",
         "cb_undone": "Desmarcado",
@@ -121,8 +127,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "metric_comment": "💬 Comentarios",
         "metric_article_week": "📝 Artículos",
         "metric_wish_vote_week": "💡 Votos a wishes",
-        "streak_days": "{icon} {label}: *{streak}/{goal}* días · faltan {missing}",
-        "streak_weeks": "{icon} {label}: *{streak}/{goal}* semanas · faltan {missing}",
+        "streak_days": "{label}: *{streak}/{goal}* días · faltan {missing}",
+        "streak_weeks": "{label}: *{streak}/{goal}* semanas · faltan {missing}",
         "cb_streak_progress": "{icon} ¡Marcado! Racha: {streak}/{goal} días · faltan {missing} 🔥",
         "cb_streak_weeks_progress": "{icon} ¡Marcado! Racha: {streak}/{goal} semanas · faltan {missing} 🔥",
         "adv_title": "⚙️ *Opciones avanzadas de racha*\n\n_AWS no expone el avance interno, así que tú llevas la cuenta aquí. Ajusta si empezaste antes de instalar el bot o si rompiste la racha._\n\n¿Qué racha quieres ajustar?",
@@ -136,6 +142,56 @@ STRINGS: dict[str, dict[str, str]] = {
         "btn_adv_set": "🔢 Fijar días",
         "btn_adv_reset": "❌ Perdí la racha",
         "btn_adv_back": "← Volver",
+        # ---- canal de correo ----
+        "email_daily_subject": "☀️ Tu misión de hoy · {total}/{max}",
+        "email_congrats_subject": "🎉 ¡Badge nueva en Builder Center!",
+        "email_finished_subject": "🏆 ¡Completaste las 21 badges!",
+        "email_confirm_subject": "Confirma tu correo · Builder Badge Coach",
+        "email_confirm_body": (
+            "Hola {name} 👋\n"
+            "Confirma tu correo y te mando la misión diaria a las *{hour}* ({tz})."
+        ),
+        "email_confirm_btn": "✅ Confirmar mi correo",
+        "email_confirm_ignore": "Si no fuiste tú, ignora este correo: no te volveré a escribir.",
+        "email_known_subject": "Tu acceso a Builder Badge Coach",
+        "email_known_body": "Ya estás inscrito con este correo. Desde aquí ves tu progreso y cambias horario, idioma o pausas los correos:",
+        "email_checkin": "Marca lo que hagas hoy:",
+        "email_finished_body": "Reclama tu voucher en Builder Center. Desde hoy no te mando más misiones diarias.",
+        "email_footer": "Recibes este correo porque te inscribiste en Builder Badge Coach con @{alias}.",
+        "email_btn_progress": "📊 Mi progreso y ajustes",
+        "email_unsubscribe": "Darme de baja",
+        # ---- páginas web ----
+        "web_tagline": "Tu misión diaria para las 21 badges de AWS Builder Center, en un correo corto.",
+        "web_email": "Tu correo",
+        "web_alias": "Tu alias de Builder Center",
+        "web_alias_hint": "Está en la URL de tu perfil: builder.aws.com/community/@tualias",
+        "web_time": "¿A qué hora te escribo?",
+        "web_lang": "Idioma",
+        "web_submit": "Inscribirme",
+        "web_privacy": "Guardo lo mínimo: tu correo, tu alias, tu horario y tus check-ins. Te das de baja con un clic.",
+        "privacy_link": "Aviso de privacidad",
+        "web_err_email": "Ese correo no parece válido.",
+        "web_err_alias": "No encontré el perfil @{alias} en Builder Center.",
+        "web_err_time": "Elige una hora válida.",
+        "web_check_inbox": "📬 Te mandé un correo a *{email}*. Ábrelo y confirma para empezar.",
+        "web_check_spam": "¿No llega? Revisa spam o promociones.",
+        "web_confirmed": "✅ *¡Listo, {name}!* Tu primera misión llega a las *{hour}* ({tz}).",
+        "web_link_invalid": "Este enlace no es válido o ya venció. Usa el del correo más reciente.",
+        "web_checkin_btn": "Marcar como hecho",
+        "web_checkin_old": "Ese check-in era de un día que ya pasó.",
+        "web_today_left": "Te falta hoy:",
+        "web_settings": "⚙️ Ajustes",
+        "web_tz": "Zona horaria",
+        "web_enabled": "Recibir la misión diaria",
+        "web_save": "Guardar",
+        "web_saved": "✅ Guardado.",
+        "web_delete": "Borrar mis datos",
+        "web_delete_confirm": "¿Seguro? Se borra todo tu progreso.",
+        "web_deleted": "🗑️ Borré todos tus datos.",
+        "web_unsub_title": "¿Dejar de recibir la misión diaria?",
+        "web_unsub_btn": "Sí, darme de baja",
+        "web_unsub_done": "Listo, no te escribo más. Si cambias de idea, reactívalo en tus ajustes.",
+        "web_open_bc": "🌐 Abrir Builder Center",
     },
     "en": {
         "choose_lang": "🌐 Choose your language / Elige tu idioma:",
@@ -163,7 +219,8 @@ STRINGS: dict[str, dict[str, str]] = {
             "/timezone `Area/City` – time zone (e.g. /timezone America/Bogota)\n"
             "/language – Spanish or English\n"
             "/pause · /resume – reminders off/on\n"
-            "/delete – wipe your data\n\n"
+            "/delete – wipe your data\n"
+            "/privacy – what data I keep\n\n"
             "_AWS only publishes badges you already earned, not the progress inside each streak. "
             "That's why you tap the \"done\" buttons and I confirm every badge against the public API._"
         ),
@@ -174,6 +231,10 @@ STRINGS: dict[str, dict[str, str]] = {
             "Check the alias in your profile URL: builder.aws.com/community/@*youralias*"
         ),
         "api_down": "Builder Center didn't answer ({error}). Let's try again in a bit.",
+        "profile_limit": (
+            "🔒 The profile `{alias}` is already followed by {max} Telegram accounts, the maximum.\n"
+            "If it is your profile, run /delete on the account you no longer use and connect it here again."
+        ),
         "profile_ok": (
             "✅ *Connected:* {name} (@{alias})\n"
             "🏅 Badges found: *{total}/{max}*  `{bar}`\n"
@@ -203,13 +264,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "streaks_title": "*🔥 Your streaks*",
         "streaks_none": "You already have every streak badge. 🔥",
         "streaks_hint": "_I count what you tap in /today; AWS only confirms the badge at the end._",
-        "daily_title": "☀️ *Today's mission · Builder Center*",
-        "daily_routine": "*Daily routine · 10 min*",
-        "daily_focus": "*🎯 Today's focus*",
-        "daily_weekly": "*📅 This week*",
-        "daily_streaks": "*🔥 Active streaks*",
-        "daily_streaks_hint": "_Tap the routine button every day to keep your streak going:_",
-        "daily_footer": "Tap what you finish 👇",
+        "daily_title": "☀️ *Today · {total}/{max}*  `{bar}`",
+        "daily_routine": "🔑 Sign in · 📖 Read 1 · ❤️ Like · 💬 Comment",
+        "daily_routine_done": "✅ Today's routine done",
+        "daily_focus": "🎯 *{badge}*: {how}",
+        "daily_streak": "🔥 {label} · streak *{streak}/{goal}* days",
+        "daily_weekly": "📅 This week: {tasks}",
         "progress": "Progress: *{total}/{max}*  `{bar}`",
         "tier_next": "*{missing}* to go for: {reward}",
         "tier_done": "🏆 All 21! Claim your reward in Builder Center.",
@@ -223,15 +283,17 @@ STRINGS: dict[str, dict[str, str]] = {
             "somebody out there needs to read how you did it.\n\n"
             "Done with reminders? /pause"
         ),
+        "btn_app": "🚀 Open my dashboard",
         "btn_open": "🌐 Open Builder Center",
         "btn_read": "📖 Read",
         "btn_write": "✍️ Write",
         "btn_wishlist": "💡 Wishlist",
         "btn_profile": "👤 My profile",
         "btn_rewards": "🎁 Rewards",
-        "btn_settings": "⚙️ Edit profile",
         "btn_sync": "🔄 Check badges",
         "btn_today": "☀️ Today's mission",
+        "btn_focus": "🎯 {badge}",
+        "btn_progress": "📊 My exact progress",
         "btn_go": "👉 Go to {what}",
         "cb_done": "Done! ✅",
         "cb_undone": "Unmarked",
@@ -250,8 +312,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "metric_comment": "💬 Comments",
         "metric_article_week": "📝 Articles",
         "metric_wish_vote_week": "💡 Wish votes",
-        "streak_days": "{icon} {label}: *{streak}/{goal}* days · {missing} to go",
-        "streak_weeks": "{icon} {label}: *{streak}/{goal}* weeks · {missing} to go",
+        "streak_days": "{label}: *{streak}/{goal}* days · {missing} to go",
+        "streak_weeks": "{label}: *{streak}/{goal}* weeks · {missing} to go",
         "cb_streak_progress": "{icon} Marked! Streak: {streak}/{goal} days · {missing} to go 🔥",
         "cb_streak_weeks_progress": "{icon} Marked! Streak: {streak}/{goal} weeks · {missing} to go 🔥",
         "adv_title": "⚙️ *Advanced streak options*\n\n_AWS doesn't expose internal streak progress, so you keep count here. Adjust if you started before installing the bot or if you broke a streak._\n\nWhich streak do you want to adjust?",
@@ -265,6 +327,56 @@ STRINGS: dict[str, dict[str, str]] = {
         "btn_adv_set": "🔢 Set days",
         "btn_adv_reset": "❌ Lost my streak",
         "btn_adv_back": "← Back",
+        # ---- email channel ----
+        "email_daily_subject": "☀️ Today's mission · {total}/{max}",
+        "email_congrats_subject": "🎉 New badge on Builder Center!",
+        "email_finished_subject": "🏆 You completed all 21 badges!",
+        "email_confirm_subject": "Confirm your email · Builder Badge Coach",
+        "email_confirm_body": (
+            "Hi {name} 👋\n"
+            "Confirm your email and I'll send your daily mission at *{hour}* ({tz})."
+        ),
+        "email_confirm_btn": "✅ Confirm my email",
+        "email_confirm_ignore": "If this wasn't you, just ignore this email: I won't write again.",
+        "email_known_subject": "Your Builder Badge Coach link",
+        "email_known_body": "You're already signed up with this email. Here you can see your progress and change time, language or pause the emails:",
+        "email_checkin": "Mark what you do today:",
+        "email_finished_body": "Claim your voucher in Builder Center. No more daily missions from now on.",
+        "email_footer": "You get this email because you signed up for Builder Badge Coach as @{alias}.",
+        "email_btn_progress": "📊 My progress and settings",
+        "email_unsubscribe": "Unsubscribe",
+        # ---- web pages ----
+        "web_tagline": "Your daily mission for the 21 AWS Builder Center badges, in one short email.",
+        "web_email": "Your email",
+        "web_alias": "Your Builder Center alias",
+        "web_alias_hint": "It's in your profile URL: builder.aws.com/community/@youralias",
+        "web_time": "When should I write to you?",
+        "web_lang": "Language",
+        "web_submit": "Sign me up",
+        "web_privacy": "I keep the minimum: your email, alias, schedule and check-ins. Unsubscribe in one click.",
+        "privacy_link": "Privacy notice",
+        "web_err_email": "That email doesn't look valid.",
+        "web_err_alias": "I couldn't find the profile @{alias} on Builder Center.",
+        "web_err_time": "Pick a valid time.",
+        "web_check_inbox": "📬 I sent an email to *{email}*. Open it and confirm to get started.",
+        "web_check_spam": "Not there? Check spam or promotions.",
+        "web_confirmed": "✅ *All set, {name}!* Your first mission arrives at *{hour}* ({tz}).",
+        "web_link_invalid": "This link is invalid or expired. Use the one in your latest email.",
+        "web_checkin_btn": "Mark as done",
+        "web_checkin_old": "That check-in was for a day that's already over.",
+        "web_today_left": "Still to do today:",
+        "web_settings": "⚙️ Settings",
+        "web_tz": "Time zone",
+        "web_enabled": "Get the daily mission",
+        "web_save": "Save",
+        "web_saved": "✅ Saved.",
+        "web_delete": "Delete my data",
+        "web_delete_confirm": "Sure? All your progress will be deleted.",
+        "web_deleted": "🗑️ All your data is gone.",
+        "web_unsub_title": "Stop getting the daily mission?",
+        "web_unsub_btn": "Yes, unsubscribe",
+        "web_unsub_done": "Done, no more emails. Changed your mind? Turn it back on in your settings.",
+        "web_open_bc": "🌐 Open Builder Center",
     },
 }
 

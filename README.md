@@ -1,6 +1,6 @@
 # Builder Badge Bot
 
-Bot de Telegram que acompaña a un builder a completar las **21 badges de AWS Builder Center**
+Coach por **Telegram o correo** que acompaña a un builder a completar las **21 badges de AWS Builder Center**
 (las del reto que da $10 / $20 en créditos y el voucher de certificación).
 
 Le mandas tu usuario de Builder Center, el bot lee tus badges desde la API pública, y todos los
@@ -19,6 +19,14 @@ Por eso el progreso de rachas se lleva con los botones de "hecho" del mensaje di
 guarda tus check-ins y calcula la racha, y la badge real se confirma contra la API cuando AWS la
 otorga.
 
+## Mini App
+
+Casi todo se puede hacer sin comandos: el botón "🚀 Abrir mi panel" (y el botón de menú del chat)
+abre una Mini App de Telegram con las 21 insignias, la rutina del día, las rachas y los ajustes.
+La identidad la da Telegram: el frontend (`webapp/index.html`) manda su `initData`
+firmado y `bot/miniapp.py` lo valida con HMAC contra el token del bot antes de tocar nada. No hay
+login de AWS ni de Builder Center.
+
 ## Comandos
 
 - `/perfil davidrm` – conecta tu perfil (también acepta la URL completa)
@@ -34,6 +42,68 @@ Cada comando tiene su alias en inglés (`/today`, `/streak`, `/time`, `/timezone
 todos los textos viven en `bot/i18n.py`; agregar un idioma es añadir una clave a `STRINGS`.
 Los mensajes traen botones que abren directo la sección de Builder Center que toca (leer,
 escribir, wishlist, recompensas, tu perfil).
+
+## Canal de correo
+
+Para quien no usa Telegram: se inscribe en una página web con su correo, su alias y la hora, confirma
+desde el correo y recibe cada día la misión (≤5 líneas) con botones de check-in.
+
+- Los correos no reciben comandos, así que cada acción es un enlace firmado con HMAC
+  (`EMAIL_LINK_SECRET`): confirmar, marcar un check-in, ver progreso y ajustes, darse de baja.
+- Abrir un enlace de check-in no marca nada por sí solo: la página hace un POST con JS, porque los
+  filtros de Outlook/Gmail abren los enlaces para escanearlos.
+- Cada correo diario lleva `List-Unsubscribe` de un clic (lo exigen Gmail y Yahoo).
+- Los usuarios de correo comparten tablas y lógica con los de Telegram (`bot/core.py`); WhatsApp
+  entraría igual, como otro canal.
+
+| Ruta | Para qué |
+| --- | --- |
+| `/` | inscripción |
+| `/confirm` | confirma el correo y activa los envíos |
+| `/c` | check-in de una tarea |
+| `/me` | progreso, rachas, tablero y ajustes (hora, zona, idioma, pausa, borrar) |
+| `/u` | baja |
+
+### Configurar el dominio (una vez)
+
+1. Despliega (abajo). El stack crea la identidad de SES para `EmailDomain` y deja en el output
+   `DkimRecords` 3 registros CNAME: créalos en el DNS de tu dominio (donde lo compraste o en
+   Route 53). SES lo verifica solo en unos minutos.
+2. Recomendado: un TXT de DMARC, `_dmarc.davidrmdev.com` → `v=DMARC1; p=none;`.
+3. SES arranca en *sandbox*: solo envía a direcciones verificadas (sirve para probar con la tuya).
+   Para abrirlo a todos, pide acceso de producción en la consola de SES → *Account dashboard*.
+4. Comparte el `SignupUrl` del output.
+
+### Dominio propio para las páginas (opcional)
+
+Con `CustomDomain=coach.davidrmdev.com` el stack crea un certificado ACM y una distribución
+CloudFront delante de la Lambda web, y todos los enlaces de los correos pasan a usar ese dominio.
+
+1. Despliega con `CustomDomain=...`. El stack se queda esperando en `WebCertificate`: en los eventos
+   del stack (consola de CloudFormation → *Events*) aparece el CNAME de validación de ACM.
+   Créalo en el DNS del dominio; ACM lo valida en unos minutos y el despliegue sigue solo.
+2. Al terminar, crea un CNAME `coach` → el valor del output `CustomDomainTarget` (`dxxxx.cloudfront.net`).
+
+El usuario de despliegue necesita los bloques `CertificadoDelDominio` y `CloudFrontDelDominio` de
+[`docs/deploy-policy.json`](docs/deploy-policy.json).
+
+## Privacidad
+
+El aviso vive en [`bot/privacy.py`](bot/privacy.py) y se sirve en `/privacidad` y `/privacy`; el
+formulario, el pie de cada correo y el comando `/privacidad` de Telegram enlazan ahí. Si cambias qué
+se guarda o con quién se comparte, actualiza ese texto en el mismo commit. `PrivacyContact` agrega un
+correo de contacto. Los logs de las Lambdas se guardan 30 días:
+
+```bash
+for f in Webhook Scheduler Web; do
+  n=$(aws cloudformation describe-stack-resource --stack-name builder-badge-bot \
+    --logical-resource-id ${f}Function --query StackResourceDetail.PhysicalResourceId --output text)
+  aws logs put-retention-policy --log-group-name /aws/lambda/$n --retention-in-days 30
+done
+```
+
+Si el dominio ya está verificado en SES en esa región, bórralo de la consola antes de desplegar
+(CloudFormation no puede adoptar una identidad existente).
 
 ## Correr local
 
@@ -64,7 +134,8 @@ de SQLite y los recordatorios los dispara EventBridge Scheduler en vez del job q
 Telegram ──webhook──▶ Lambda Function URL (bot.lambda_webhook)
                           │
 EventBridge Scheduler ─▶ Lambda (bot.lambda_scheduler) ──▶ DynamoDB  ──▶ api.builder.aws.com
-                          (cada 15 min, filtra por hora local de cada usuario)
+                          (:00 :15 :30 :45, filtra por hora local) ──▶ Telegram / Amazon SES
+Navegador ──────────────▶ Lambda Function URL (bot.web): inscripción, check-ins, ajustes
 ```
 
 | Recurso | Para qué | Costo típico |
@@ -73,6 +144,8 @@ EventBridge Scheduler ─▶ Lambda (bot.lambda_scheduler) ──▶ DynamoDB  �
 | DynamoDB on-demand | usuarios, badges, check-ins (TTL 400 días) | free tier: 25 GB |
 | EventBridge Scheduler | ~2.900 invocaciones/mes | free tier: 14M invocaciones |
 | SSM Parameter Store | token de BotFather (SecureString) | Standard: gratis |
+| Amazon SES | correo diario y confirmaciones | ~$0,10 por 1.000 correos |
+| Lambda web (Function URL) | páginas de inscripción, check-in y ajustes | free tier |
 
 Los precios dependen de región, fecha y uso; verifica en la calculadora de AWS.
 
@@ -84,10 +157,13 @@ aws ssm put-parameter --name /builder-badge-bot/telegram-token \
 # 2. secreto del webhook: Telegram lo manda en cada request y la Lambda lo valida
 WEBHOOK_SECRET=$(openssl rand -hex 32)
 
-# 3. desplegar
+# 3. desplegar (EMAIL_LINK_SECRET firma los enlaces de los correos: guárdalo, si cambia
+#    los enlaces de baja de correos viejos dejan de funcionar)
+EMAIL_LINK_SECRET=$(openssl rand -hex 32)
 sam build
 sam deploy --stack-name builder-badge-bot --resolve-s3 --capabilities CAPABILITY_IAM \
-  --parameter-overrides WebhookSecret=$WEBHOOK_SECRET
+  --parameter-overrides WebhookSecret=$WEBHOOK_SECRET EmailLinkSecret=$EMAIL_LINK_SECRET \
+    EmailDomain=davidrmdev.com "EmailFrom=Builder Badge Coach <coach@davidrmdev.com>"
 
 # 4. registrar el webhook
 URL=$(aws cloudformation describe-stacks --stack-name builder-badge-bot \
@@ -96,7 +172,27 @@ curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
   -d "url=$URL" -d "secret_token=$WEBHOOK_SECRET" -d "drop_pending_updates=true"
 ```
 
+```bash
+# 5. Mini App: se sirve desde la misma Function URL (GET = panel, POST /api/* = API)
+sam deploy --stack-name builder-badge-bot --resolve-s3 --capabilities CAPABILITY_IAM \
+  --parameter-overrides WebhookSecret=$WEBHOOK_SECRET MiniAppUrl=$URL
+
+curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setChatMenuButton" \
+  -H 'content-type: application/json' \
+  -d "{\"menu_button\":{\"type\":\"web_app\",\"text\":\"Mi panel\",\"web_app\":{\"url\":\"$URL\"}}}"
+```
+
+`MiniAppUrl` va como parámetro y no como `!GetAtt` porque la función que sirve la Mini App es la
+misma que la referencia (dependencia circular): queda vacío en el primer despliegue y se rellena
+en el segundo. Si está vacío, el bot no muestra el botón del panel.
+
 Para borrar todo: `sam delete --stack-name builder-badge-bot`.
+
+**Alarmas (opcional):** agrega `AlertEmail=tu@correo.com` a `--parameter-overrides` y el stack crea
+un tópico SNS y dos alarmas de CloudWatch que avisan si alguna Lambda falla en la última hora.
+AWS te manda un correo para confirmar la suscripción. Sin ese parámetro no se crea nada.
+El scheduler ya reintenta los cortes de red con Telegram (3 intentos con backoff), así que una
+alarma significa que los reintentos se agotaron o que falló algo más.
 
 Si despliegas con un usuario dedicado en vez de tu cuenta admin, en
 [`docs/deploy-policy.json`](docs/deploy-policy.json) está la política mínima: solo permite tocar

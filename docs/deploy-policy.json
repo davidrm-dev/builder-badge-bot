@@ -102,6 +102,94 @@
       "Resource": "arn:aws:logs:*:*:log-group:/aws/lambda/builder-badge-bot-*"
     },
     {
+      "Sid": "CorreoConSes",
+      "Effect": "Allow",
+      "Action": [
+        "ses:CreateEmailIdentity",
+        "ses:DeleteEmailIdentity",
+        "ses:GetEmailIdentity",
+        "ses:PutEmailIdentityDkimSigningAttributes",
+        "ses:PutEmailIdentityDkimAttributes",
+        "ses:PutEmailIdentityConfigurationSetAttributes",
+        "ses:PutEmailIdentityFeedbackAttributes",
+        "ses:PutEmailIdentityMailFromAttributes",
+        "ses:CreateConfigurationSet",
+        "ses:DeleteConfigurationSet",
+        "ses:GetConfigurationSet",
+        "ses:PutConfigurationSetSuppressionOptions",
+        "ses:PutConfigurationSetSendingOptions",
+        "ses:PutConfigurationSetReputationOptions",
+        "ses:PutConfigurationSetDeliveryOptions",
+        "ses:PutConfigurationSetTrackingOptions",
+        "ses:TagResource",
+        "ses:UntagResource",
+        "ses:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:ses:*:*:identity/*",
+        "arn:aws:ses:*:*:configuration-set/builder-badge-bot*"
+      ]
+    },
+    {
+      "Sid": "AlarmasDelBot",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:DeleteAlarms",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:TagResource",
+        "cloudwatch:UntagResource",
+        "cloudwatch:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:cloudwatch:*:*:alarm:builder-badge-bot*"
+    },
+    {
+      "Sid": "TopicoDeAlertas",
+      "Effect": "Allow",
+      "Action": [
+        "sns:CreateTopic",
+        "sns:DeleteTopic",
+        "sns:GetTopicAttributes",
+        "sns:SetTopicAttributes",
+        "sns:Subscribe",
+        "sns:Unsubscribe",
+        "sns:ListSubscriptionsByTopic",
+        "sns:TagResource",
+        "sns:UntagResource",
+        "sns:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:sns:*:*:builder-badge-bot*"
+    },
+    {
+      "Sid": "CertificadoDelDominio",
+      "Effect": "Allow",
+      "Action": [
+        "acm:RequestCertificate",
+        "acm:DescribeCertificate",
+        "acm:DeleteCertificate",
+        "acm:ListCertificates",
+        "acm:AddTagsToCertificate",
+        "acm:ListTagsForCertificate"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudFrontDelDominio",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:CreateDistribution",
+        "cloudfront:CreateDistributionWithTags",
+        "cloudfront:UpdateDistribution",
+        "cloudfront:GetDistribution",
+        "cloudfront:GetDistributionConfig",
+        "cloudfront:DeleteDistribution",
+        "cloudfront:TagResource",
+        "cloudfront:UntagResource",
+        "cloudfront:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:cloudfront::*:distribution/*"
+    },
+    {
       "Sid": "SoloLectura",
       "Effect": "Allow",
       "Action": ["sts:GetCallerIdentity", "ssm:DescribeParameters", "logs:DescribeLogGroups"],

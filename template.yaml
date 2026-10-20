@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: Bot de Telegram que acompaña a completar las 21 badges de AWS Builder Center (serverless).
+Description: Coach para las 21 badges de AWS Builder Center por Telegram y correo (serverless).
 
 Parameters:
   TokenParameter:
@@ -11,13 +11,62 @@ Parameters:
     Type: String
     NoEcho: true
     Description: Secreto compartido con Telegram (header X-Telegram-Bot-Api-Secret-Token).
+  MiniAppUrl:
+    Type: String
+    Default: ""
+    Description: >-
+      URL pública de la Mini App (la propia Function URL). Se pasa como parámetro porque
+      referenciarla desde la función que la sirve creaba una dependencia circular: se deja
+      vacía en el primer despliegue y se rellena en el segundo con el valor de WebhookUrl.
+  BedrockModelId:
+    Type: String
+    Default: us.amazon.nova-lite-v1:0
+    Description: >-
+      Modelo de Bedrock para el mensaje motivador diario (uno por usuario y día, cacheado).
+      Déjalo vacío para desactivar Bedrock y usar solo los mensajes estáticos.
   DefaultTimezone:
     Type: String
     Default: America/Bogota
+  EmailDomain:
+    Type: String
+    Default: davidrmdev.com
+    Description: Dominio desde el que se mandan los correos (SES lo verifica con 3 CNAME de DKIM).
+  EmailFrom:
+    Type: String
+    Default: "Builder Badge Coach <coach@davidrmdev.com>"
+    Description: Remitente; debe ser una dirección del dominio EmailDomain (no necesita buzón).
+  EmailLinkSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: Clave para firmar los enlaces de los correos (openssl rand -hex 32).
+  PrivacyContact:
+    Type: String
+    Default: ""
+    Description: Correo de contacto que aparece en el aviso de privacidad (vacío = no se muestra).
+  CustomDomain:
+    Type: String
+    Default: ""
+    Description: >-
+      Subdominio propio para las páginas de correo (ej. coach.davidrmdev.com). Crea un
+      certificado ACM y una distribución CloudFront delante de la Lambda web. Vacío = no.
+  PublicBaseUrl:
+    Type: String
+    Default: ""
+    Description: Dominio propio para las páginas (ej. https://coach.davidrmdev.com). Vacío = Function URL.
   ScheduleWindowMinutes:
     Type: Number
     Default: 15
-    Description: Cada cuántos minutos corre el scheduler (debe coincidir con el cron).
+    Description: Cada cuántos minutos corre el scheduler, en punto (debe dividir 60).
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: Correo para las alarmas de errores de las Lambdas (vacío = sin alarmas).
+
+Conditions:
+  HasAlerts: !Not [!Equals [!Ref AlertEmail, ""]]
+  HasPublicBaseUrl: !Not [!Equals [!Ref PublicBaseUrl, ""]]
+  HasCustomDomain: !Not [!Equals [!Ref CustomDomain, ""]]
 
 Globals:
   Function:
@@ -30,6 +79,12 @@ Globals:
         BOT_TABLE: !Ref Table
         BOT_DEFAULT_TZ: !Ref DefaultTimezone
         TOKEN_PARAMETER: !Ref TokenParameter
+        EMAIL_FROM: !Ref EmailFrom
+        EMAIL_LINK_SECRET: !Ref EmailLinkSecret
+        SES_CONFIGURATION_SET: !Ref EmailConfigSet
+        MINIAPP_URL: !Ref MiniAppUrl
+        BEDROCK_MODEL_ID: !Ref BedrockModelId
+        PRIVACY_CONTACT: !Ref PrivacyContact
 
 Resources:
   Table:
@@ -50,6 +105,102 @@ Resources:
         AttributeName: ttl
         Enabled: true
 
+  EmailConfigSet:
+    Type: AWS::SES::ConfigurationSet
+    Properties:
+      Name: !Sub "${AWS::StackName}-email"
+      # Rebotes y quejas van a la lista de supresión: no se reintenta a esas direcciones
+      # y la reputación del dominio no se daña.
+      SuppressionOptions:
+        SuppressedReasons: [BOUNCE, COMPLAINT]
+
+  EmailIdentity:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Ref EmailDomain
+      ConfigurationSetAttributes:
+        ConfigurationSetName: !Ref EmailConfigSet
+      DkimSigningAttributes:
+        NextSigningKeyLength: RSA_2048_BIT
+
+  WebFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: bot.web.handler
+      Environment:
+        Variables:
+          PUBLIC_BASE_URL: !If
+            - HasCustomDomain
+            - !Sub "https://${CustomDomain}"
+            - !Ref PublicBaseUrl
+      FunctionUrlConfig:
+        AuthType: NONE
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref Table
+        - Statement:
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource:
+                - !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${EmailDomain}"
+                - !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${EmailConfigSet}"
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
+                - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*"
+            # En sandbox SES también autoriza contra la identidad del destinatario; se permite
+            # cualquier destinatario, pero solo con remitente del dominio propio.
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource: !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
+              Condition:
+                StringLike:
+                  ses:FromAddress: !Sub "*@${EmailDomain}"
+
+  # ---------------- dominio propio (opcional) ----------------
+  # El certificado se valida por DNS: mientras se crea, el stack queda esperando hasta que el
+  # CNAME de validación exista en el DNS del dominio (sale en los eventos del stack).
+  WebCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Condition: HasCustomDomain
+    Properties:
+      DomainName: !Ref CustomDomain
+      ValidationMethod: DNS
+
+  WebDistribution:
+    Type: AWS::CloudFront::Distribution
+    Condition: HasCustomDomain
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "${AWS::StackName} paginas de correo"
+        Aliases: [!Ref CustomDomain]
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          AcmCertificateArn: !Ref WebCertificate
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        Origins:
+          - Id: web
+            # La Function URL viene como https://<id>.lambda-url.<region>.on.aws/
+            DomainName: !Select [2, !Split ["/", !GetAtt WebFunctionUrl.FunctionUrl]]
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+        DefaultCacheBehavior:
+          TargetOriginId: web
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          # Páginas dinámicas con enlaces firmados: nada se cachea.
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # Managed-CachingDisabled
+          # Reenvía query, cuerpo y headers salvo Host (la Function URL exige su propio Host).
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac  # Managed-AllViewerExceptHostHeader
+
   WebhookFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -58,6 +209,11 @@ Resources:
       Environment:
         Variables:
           WEBHOOK_SECRET: !Ref WebhookSecret
+          # Para enlazar el aviso de privacidad desde /privacidad.
+          PUBLIC_BASE_URL: !If
+            - HasCustomDomain
+            - !Sub "https://${CustomDomain}"
+            - !If [HasPublicBaseUrl, !Ref PublicBaseUrl, !GetAtt WebFunctionUrl.FunctionUrl]
       FunctionUrlConfig:
         AuthType: NONE
       Policies:
@@ -73,6 +229,11 @@ Resources:
               Condition:
                 StringEquals:
                   kms:ViaService: !Sub "ssm.${AWS::Region}.amazonaws.com"
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
+                - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*"
 
   SchedulerFunction:
     Type: AWS::Serverless::Function
@@ -83,10 +244,27 @@ Resources:
       Environment:
         Variables:
           SCHEDULE_WINDOW_MINUTES: !Ref ScheduleWindowMinutes
+          PUBLIC_BASE_URL: !If
+            - HasCustomDomain
+            - !Sub "https://${CustomDomain}"
+            - !If [HasPublicBaseUrl, !Ref PublicBaseUrl, !GetAtt WebFunctionUrl.FunctionUrl]
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref Table
         - Statement:
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource:
+                - !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${EmailDomain}"
+                - !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/${EmailConfigSet}"
+            # En sandbox SES también autoriza contra la identidad del destinatario; se permite
+            # cualquier destinatario, pero solo con remitente del dominio propio.
+            - Effect: Allow
+              Action: ses:SendEmail
+              Resource: !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
+              Condition:
+                StringLike:
+                  ses:FromAddress: !Sub "*@${EmailDomain}"
             - Effect: Allow
               Action: ssm:GetParameter
               Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${TokenParameter}"
@@ -96,17 +274,88 @@ Resources:
               Condition:
                 StringEquals:
                   kms:ViaService: !Sub "ssm.${AWS::Region}.amazonaws.com"
+            - Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource:
+                - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/*"
+                - !Sub "arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*"
       Events:
         Tick:
           Type: ScheduleV2
           Properties:
             Name: !Sub "${AWS::StackName}-tick"
-            ScheduleExpression: !Sub "rate(${ScheduleWindowMinutes} minutes)"
+            # En punto (:00, :15, :30, :45): quien elige una hora redonda la recibe a esa hora.
+            # rate() quedaba anclado al minuto en que se creó el stack (:14, :29...).
+            ScheduleExpression: !Sub "cron(0/${ScheduleWindowMinutes} * * * ? *)"
             Description: Revisa quién tiene recordatorio pendiente en su hora local.
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasAlerts
+    Properties:
+      TopicName: !Sub "${AWS::StackName}-alerts"
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+
+  SchedulerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlerts
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-scheduler-errors"
+      AlarmDescription: El scheduler de recordatorios falló (incluye reintentos agotados con Telegram).
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref SchedulerFunction
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+  WebhookErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlerts
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-webhook-errors"
+      AlarmDescription: La Lambda del webhook de Telegram está fallando.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref WebhookFunction
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
 
 Outputs:
   WebhookUrl:
     Description: URL que hay que registrar en Telegram con setWebhook.
     Value: !GetAtt WebhookFunctionUrl.FunctionUrl
+  SignupUrl:
+    Description: Página de inscripción por correo (compártela con los builders).
+    Value: !If
+      - HasCustomDomain
+      - !Sub "https://${CustomDomain}"
+      - !If [HasPublicBaseUrl, !Ref PublicBaseUrl, !GetAtt WebFunctionUrl.FunctionUrl]
+  DkimRecords:
+    Description: 3 registros CNAME que hay que crear en el DNS del dominio para que SES lo verifique.
+    Value: !Join
+      - "  |  "
+      - - !Join [" CNAME ", [!GetAtt EmailIdentity.DkimDNSTokenName1, !GetAtt EmailIdentity.DkimDNSTokenValue1]]
+        - !Join [" CNAME ", [!GetAtt EmailIdentity.DkimDNSTokenName2, !GetAtt EmailIdentity.DkimDNSTokenValue2]]
+        - !Join [" CNAME ", [!GetAtt EmailIdentity.DkimDNSTokenName3, !GetAtt EmailIdentity.DkimDNSTokenValue3]]
+  CustomDomainTarget:
+    Condition: HasCustomDomain
+    Description: Crea en el DNS un CNAME del subdominio apuntando aquí.
+    Value: !GetAtt WebDistribution.DomainName
   TableName:
     Value: !Ref Table

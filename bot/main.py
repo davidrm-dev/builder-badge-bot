@@ -5,10 +5,9 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import date, datetime, time
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from datetime import date, time
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import (
@@ -22,9 +21,11 @@ from telegram.ext import (
 
 from . import badges as cat
 from . import builder_api as api
-from . import coach
+from . import coach, core, privacy
 from .commands import register_commands
-from .db import Store, User
+from .config import public_base_url
+from .core import hhmm, today_for, user_tz, valid_tz
+from .db import User
 from .i18n import LANG_NAMES, LANGS, normalize, t
 
 logging.basicConfig(
@@ -33,45 +34,32 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("builder-badge-bot")
 
-DB_PATH = os.environ.get("BOT_DB_PATH", "data/bot.sqlite3")
-DEFAULT_TZ = os.environ.get("BOT_DEFAULT_TZ", "America/Bogota")
+store = core.get_store()
+# URL de la Mini App (la misma Function URL). Vacía en local: entonces no se ofrece el panel.
+MINIAPP_URL = os.environ.get("MINIAPP_URL", "")
+# Cuántas cuentas de Telegram distintas pueden seguir el mismo perfil de Builder Center.
+MAX_LINKED_CHATS = int(os.environ.get("BOT_MAX_LINKED_CHATS", "3"))
 
 
-def build_store():
-    """DynamoDB si corre en Lambda (BOT_TABLE), SQLite en local/VM."""
-    if os.environ.get("BOT_TABLE"):
-        from .dynamo import DynamoStore
-
-        return DynamoStore()
-    return Store(DB_PATH)
-
-
-store = build_store()
+class ProfileLinkLimit(Exception):
+    """El perfil ya está seguido por el máximo de cuentas de Telegram permitidas."""
 
 
 # --------------------------------------------------------------------------- utilidades
-def user_tz(user: User) -> ZoneInfo:
-    try:
-        return ZoneInfo(user.tz)
-    except ZoneInfoNotFoundError:
-        return ZoneInfo(DEFAULT_TZ)
-
-
-def today_for(user: User) -> date:
-    return datetime.now(user_tz(user)).date()
-
-
 def lang_of(chat_id: int) -> str:
     user = store.get_user(chat_id)
     return normalize(user.lang if user else None)
 
 
-def hhmm(user: User) -> str:
-    return f"{user.hour:02d}:{user.minute:02d}"
-
-
 def link_button(lang: str, key: str, link: str) -> InlineKeyboardButton:
     return InlineKeyboardButton(t(lang, key), url=cat.LINKS[link])
+
+
+def app_row(lang: str) -> list[list[InlineKeyboardButton]]:
+    """Fila con el botón que abre la Mini App, si está desplegada."""
+    if not MINIAPP_URL:
+        return []
+    return [[InlineKeyboardButton(t(lang, "btn_app"), web_app=WebAppInfo(MINIAPP_URL))]]
 
 
 def lang_keyboard() -> InlineKeyboardMarkup:
@@ -82,7 +70,7 @@ def lang_keyboard() -> InlineKeyboardMarkup:
 
 def routine_keyboard(chat_id: int, day: date, lang: str) -> InlineKeyboardMarkup:
     done = store.tasks_done(chat_id, day)
-    rows: list[list[InlineKeyboardButton]] = []
+    rows: list[list[InlineKeyboardButton]] = app_row(lang)
     row: list[InlineKeyboardButton] = []
     for task, icon, _es, _en, _link in cat.DAILY_ROUTINE + cat.WEEKLY_ROUTINE:
         mark = "✅" if task in done else "⬜"
@@ -96,6 +84,12 @@ def routine_keyboard(chat_id: int, day: date, lang: str) -> InlineKeyboardMarkup
             row = []
     if row:
         rows.append(row)
+    targets = coach.next_targets(coach.earned_keys(store, chat_id), limit=1)
+    if targets:
+        rows.append([
+            InlineKeyboardButton(t(lang, "btn_focus", badge=targets[0].name), url=targets[0].url),
+            link_button(lang, "btn_progress", "badges"),
+        ])
     rows.append([link_button(lang, "btn_open", "home"), link_button(lang, "btn_read", "learn")])
     rows.append([link_button(lang, "btn_write", "write"), link_button(lang, "btn_wishlist", "wishlist")])
     rows.append([
@@ -139,7 +133,8 @@ def adv_action_keyboard(lang: str, metric: str) -> InlineKeyboardMarkup:
 def board_keyboard(lang: str, alias: str | None) -> InlineKeyboardMarkup:
     profile = cat.profile_url(alias) if alias else cat.LINKS["profile"]
     return InlineKeyboardMarkup(
-        [
+        app_row(lang)
+        + [
             [
                 InlineKeyboardButton(t(lang, "btn_profile"), url=profile),
                 link_button(lang, "btn_rewards", "rewards"),
@@ -154,7 +149,8 @@ def board_keyboard(lang: str, alias: str | None) -> InlineKeyboardMarkup:
 
 def welcome_keyboard(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        [
+        app_row(lang)
+        + [
             [
                 InlineKeyboardButton(t(lang, "btn_today"), callback_data="today"),
                 link_button(lang, "btn_open", "home"),
@@ -163,30 +159,23 @@ def welcome_keyboard(lang: str) -> InlineKeyboardMarkup:
     )
 
 
+def link_profile(chat_id: int, alias: str) -> api.Profile:
+    """Asocia un perfil público de Builder Center a este chat, con tope de cuentas por perfil.
+
+    Cualquiera puede seguir un alias público, pero las rachas y check-ins viven bajo el
+    chat_id firmado por Telegram, así que seguir a alguien nunca toca sus datos.
+    """
+    profile = api.get_profile(alias)
+    linked = store.chat_ids_for_profile(profile.builder_profile_id) - {chat_id}
+    if len(linked) >= MAX_LINKED_CHATS:
+        raise ProfileLinkLimit(profile.alias)
+    store.set_profile(chat_id, profile.alias, profile.builder_profile_id, profile.name)
+    return profile
+
+
 def sync_badges(chat_id: int, notify_new: bool = True) -> tuple[list[str], int, list[int]]:
     """Trae las badges desde la API y devuelve (nuevas, total, tiers nuevos)."""
-    user = store.get_user(chat_id)
-    if not user or not user.bp_id:
-        return [], 0, []
-    awarded = api.get_awarded_badges(user.bp_id)
-    known = store.known_badge_ids(chat_id)
-    new_names = []
-    for badge in awarded:
-        match = cat.match(badge.badge_id, badge.display_name)
-        if badge.badge_id not in known:
-            new_names.append(badge.display_name or badge.badge_id)
-        store.save_badge(
-            chat_id,
-            badge.badge_id,
-            match.key if match else None,
-            badge.display_name,
-            badge.awarded_epoch,
-        )
-    total = store.badge_count(chat_id)
-    tiers = store.pending_tiers(chat_id, total, list(cat.TIER_VALUES))
-    if not notify_new:
-        return [], total, []
-    return new_names, total, tiers
+    return core.sync_badges(store, chat_id, notify_new)
 
 
 # --------------------------------------------------------------------------- scheduling
@@ -281,16 +270,21 @@ async def set_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, alias:
     store.ensure_user(chat_id)
     lang = lang_of(chat_id)
     try:
-        profile = api.get_profile(alias)
+        profile = link_profile(chat_id, alias)
     except api.ProfileNotFound:
         await update.message.reply_text(
             t(lang, "profile_not_found", alias=alias), parse_mode=ParseMode.MARKDOWN
         )
         return
+    except ProfileLinkLimit:
+        await update.message.reply_text(
+            t(lang, "profile_limit", alias=alias, max=MAX_LINKED_CHATS),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
     except api.BuilderApiError as exc:
         await update.message.reply_text(t(lang, "api_down", error=exc))
         return
-    store.set_profile(chat_id, profile.alias, profile.builder_profile_id, profile.name)
     first_time = store.badge_count(chat_id) == 0
     try:
         _new, total, _tiers = sync_badges(chat_id, notify_new=not first_time)
@@ -484,9 +478,7 @@ async def cmd_tz(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
         await update.message.reply_text(t(lang, "tz_usage"), parse_mode=ParseMode.MARKDOWN)
         return
-    try:
-        ZoneInfo(context.args[0])
-    except (ZoneInfoNotFoundError, ValueError):
+    if not valid_tz(context.args[0]):
         await update.message.reply_text(t(lang, "tz_invalid"), parse_mode=ParseMode.MARKDOWN)
         return
     store.set_timezone(chat_id, context.args[0])
@@ -515,6 +507,17 @@ async def cmd_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         t(normalize(user.lang), "resumed", hour=hhmm(user), tz=user.tz),
         parse_mode=ParseMode.MARKDOWN,
     )
+
+
+async def cmd_privacy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    lang = lang_of(update.effective_chat.id)
+    base = public_base_url()
+    markup = (
+        InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "privacy_link"), url=privacy.url(base, lang))]])
+        if base
+        else None
+    )
+    await update.message.reply_text(privacy.summary(lang), parse_mode=ParseMode.MARKDOWN, reply_markup=markup)
 
 
 async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -708,6 +711,7 @@ def build_app(token: str, *, with_jobs: bool = True) -> Application:
     app.add_handler(CommandHandler(["pausar", "pause"], cmd_pause))
     app.add_handler(CommandHandler(["activar", "resume"], cmd_resume))
     app.add_handler(CommandHandler(["borrar", "delete"], cmd_delete))
+    app.add_handler(CommandHandler(["privacidad", "privacy"], cmd_privacy))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_error_handler(on_error)

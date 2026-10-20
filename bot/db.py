@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -18,6 +19,9 @@ CREATE TABLE IF NOT EXISTS users (
     minute      INTEGER NOT NULL DEFAULT 0,
     enabled     INTEGER NOT NULL DEFAULT 1,
     lang        TEXT NOT NULL DEFAULT 'es',
+    email       TEXT,
+    last_daily  TEXT,
+    confirm_at  REAL,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS badges (
@@ -40,6 +44,12 @@ CREATE TABLE IF NOT EXISTS tiers (
     tier    INTEGER NOT NULL,
     PRIMARY KEY (chat_id, tier)
 );
+CREATE TABLE IF NOT EXISTS pep_talks (
+    chat_id INTEGER NOT NULL,
+    day     TEXT NOT NULL,
+    text    TEXT NOT NULL,
+    PRIMARY KEY (chat_id, day)
+);
 """
 
 
@@ -54,6 +64,20 @@ class User:
     minute: int
     enabled: bool
     lang: str = "es"
+    email: str | None = None  # usuarios del canal de correo; los de Telegram no tienen
+
+    @property
+    def channel(self) -> str:
+        return "email" if self.email else "telegram"
+
+
+# Los usuarios de correo usan ids negativos fuera del rango de Telegram (|chat_id| < 2**53),
+# así comparten tablas y lógica sin chocar con un chat real.
+EMAIL_ID_MIN, EMAIL_ID_MAX = -(2**62), -(2**53)
+
+
+def new_email_user_id() -> int:
+    return EMAIL_ID_MIN + secrets.randbelow(EMAIL_ID_MAX - EMAIL_ID_MIN)
 
 
 class Store:
@@ -73,6 +97,10 @@ class Store:
         checkin_cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(checkins)")}
         if "synthetic" not in checkin_cols:
             self._conn.execute("ALTER TABLE checkins ADD COLUMN synthetic INTEGER NOT NULL DEFAULT 0")
+        for col, kind in (("email", "TEXT"), ("last_daily", "TEXT"), ("confirm_at", "REAL")):
+            if col not in cols:
+                self._conn.execute(f"ALTER TABLE users ADD COLUMN {col} {kind}")
+        self._conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_email ON users (email)")
 
     # ---------------- usuarios ----------------
     def ensure_user(self, chat_id: int) -> User:
@@ -102,13 +130,62 @@ class Store:
             minute=row["minute"],
             enabled=bool(row["enabled"]),
             lang=row["lang"],
+            email=row["email"],
         )
 
+    def create_email_user(self, email: str, lang: str) -> tuple[User, bool]:
+        """Crea un usuario de correo pausado hasta que confirme. Devuelve (usuario, es_nuevo)."""
+        existing = self.get_user_by_email(email)
+        if existing:
+            return existing, False
+        while True:
+            uid = new_email_user_id()
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO users (chat_id, email, lang, enabled) VALUES (?, ?, ?, 0)",
+                (uid, email, lang),
+            )
+            if cur.rowcount:
+                self._conn.commit()
+                user = self.get_user(uid)
+                assert user is not None
+                return user, True
+
+    def get_user_by_email(self, email: str) -> User | None:
+        row = self._conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+        return self._to_user(row) if row else None
+
+    def chat_ids_for_profile(self, bp_id: str) -> set[int]:
+        rows = self._conn.execute("SELECT chat_id FROM users WHERE bp_id = ?", (bp_id,))
+        return {int(r["chat_id"]) for r in rows}
+
     def set_profile(self, chat_id: int, alias: str, bp_id: str, name: str) -> None:
-        self.ensure_user(chat_id)
+        previous = self.ensure_user(chat_id)
         self._conn.execute(
             "UPDATE users SET alias = ?, bp_id = ?, name = ? WHERE chat_id = ?",
             (alias, bp_id, name, chat_id),
+        )
+        self._conn.commit()
+        if previous.bp_id and previous.bp_id != bp_id:
+            # Las badges y los hitos son del perfil anterior: si no se borran, el panel suma
+            # las de los dos perfiles.
+            self.clear_badges(chat_id)
+
+    # ---------------- mensaje generado del día ----------------
+    def get_pep_talk(self, chat_id: int, day: date) -> str | None:
+        row = self._conn.execute(
+            "SELECT text FROM pep_talks WHERE chat_id = ? AND day = ?",
+            (chat_id, day.isoformat()),
+        ).fetchone()
+        return row["text"] if row else None
+
+    def save_pep_talk(self, chat_id: int, day: date, text: str) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO pep_talks (chat_id, day, text) VALUES (?, ?, ?)",
+            (chat_id, day.isoformat(), text),
+        )
+        self._conn.execute(
+            "DELETE FROM pep_talks WHERE chat_id = ? AND day < ?",
+            (chat_id, (day - timedelta(days=7)).isoformat()),
         )
         self._conn.commit()
 
@@ -139,6 +216,23 @@ class Store:
             self._conn.execute(f"DELETE FROM {table} WHERE chat_id = ?", (chat_id,))
         self._conn.commit()
 
+    # ---------------- control de envíos ----------------
+    def last_daily_sent(self, chat_id: int) -> str | None:
+        row = self._conn.execute("SELECT last_daily FROM users WHERE chat_id = ?", (chat_id,)).fetchone()
+        return row["last_daily"] if row else None
+
+    def mark_daily_sent(self, chat_id: int, day: date) -> None:
+        self._conn.execute("UPDATE users SET last_daily = ? WHERE chat_id = ?", (day.isoformat(), chat_id))
+        self._conn.commit()
+
+    def last_confirm_sent(self, chat_id: int) -> float | None:
+        row = self._conn.execute("SELECT confirm_at FROM users WHERE chat_id = ?", (chat_id,)).fetchone()
+        return row["confirm_at"] if row else None
+
+    def mark_confirm_sent(self, chat_id: int, epoch: float) -> None:
+        self._conn.execute("UPDATE users SET confirm_at = ? WHERE chat_id = ?", (epoch, chat_id))
+        self._conn.commit()
+
     # ---------------- badges ----------------
     def known_badge_ids(self, chat_id: int) -> set[str]:
         rows = self._conn.execute("SELECT badge_id FROM badges WHERE chat_id = ?", (chat_id,))
@@ -158,6 +252,23 @@ class Store:
             " VALUES (?, ?, ?, ?, ?)",
             (chat_id, badge_id, badge_key, display_name, epoch),
         )
+        self._conn.commit()
+
+    def delete_badges(self, chat_id: int, badge_ids: set[str]) -> None:
+        for badge_id in badge_ids:
+            self._conn.execute(
+                "DELETE FROM badges WHERE chat_id = ? AND badge_id = ?", (chat_id, badge_id)
+            )
+        self._conn.commit()
+
+    def clear_badges(self, chat_id: int) -> None:
+        self._conn.execute("DELETE FROM badges WHERE chat_id = ?", (chat_id,))
+        self._conn.execute("DELETE FROM tiers WHERE chat_id = ?", (chat_id,))
+        self._conn.commit()
+
+    def prune_tiers(self, chat_id: int, count: int) -> None:
+        """Olvida los hitos por encima del total actual para que se vuelvan a anunciar."""
+        self._conn.execute("DELETE FROM tiers WHERE chat_id = ? AND tier > ?", (chat_id, count))
         self._conn.commit()
 
     def badge_count(self, chat_id: int) -> int:
@@ -207,17 +318,18 @@ class Store:
     def set_streak(self, chat_id: int, task: str, days: int, today: date) -> None:
         """Ajusta la racha de `task` a `days` días rellenando hacia atrás con check-ins sintéticos.
 
-        - Borra los check-ins sintéticos anteriores a hoy para esa tarea (limpia ajuste previo).
-        - Inserta check-ins sintéticos en los (days - 1) días anteriores a hoy que falten.
+        - Borra los check-ins sintéticos de hoy hacia atrás (limpia un ajuste previo).
+        - Inserta check-ins sintéticos en los `days` días que terminan hoy, incluido hoy: la
+          racha declarada cuenta el día actual, y sin él la cadena se rompe mañana.
         - No toca los check-ins reales (synthetic=0) del usuario.
         """
-        # 1. Borrar sintéticos pasados para empezar limpio
+        # 1. Borrar sintéticos previos para empezar limpio
         self._conn.execute(
-            "DELETE FROM checkins WHERE chat_id = ? AND task = ? AND day < ? AND synthetic = 1",
+            "DELETE FROM checkins WHERE chat_id = ? AND task = ? AND day <= ? AND synthetic = 1",
             (chat_id, task, today.isoformat()),
         )
         # 2. Insertar sintéticos para los días que falten
-        for offset in range(1, days):
+        for offset in range(days):
             day = today - timedelta(days=offset)
             self._conn.execute(
                 "INSERT OR IGNORE INTO checkins (chat_id, day, task, synthetic) VALUES (?, ?, ?, 1)",
@@ -226,9 +338,9 @@ class Store:
         self._conn.commit()
 
     def reset_streak(self, chat_id: int, task: str, today: date) -> None:
-        """Reinicia la racha borrando todos los check-ins sintéticos anteriores a hoy."""
+        """Reinicia la racha borrando todos los check-ins sintéticos de hoy hacia atrás."""
         self._conn.execute(
-            "DELETE FROM checkins WHERE chat_id = ? AND task = ? AND day < ? AND synthetic = 1",
+            "DELETE FROM checkins WHERE chat_id = ? AND task = ? AND day <= ? AND synthetic = 1",
             (chat_id, task, today.isoformat()),
         )
         self._conn.commit()
